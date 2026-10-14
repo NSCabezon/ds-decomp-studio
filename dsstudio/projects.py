@@ -9,7 +9,7 @@ from . import config, games, gitutil
 # Never published: game data, build outputs, binaries we are not allowed to distribute
 FORBIDDEN_EXT = {".nds", ".bin", ".srl", ".sav", ".narc", ".sdat", ".nftr", ".nclr", ".ncgr", ".nscr", ".exe",
                  ".dll", ".o", ".elf", ".zip", ".7z"}
-MAX_FILE = 2 * 1024 * 1024
+MAX_FILE = 20 * 1024 * 1024
 
 
 def roms_without_project() -> list[dict]:

@@ -80,7 +80,7 @@ arrêter les tâches). Git Bash est nécessaire pour lancer les tâches sous Win
 ## Règles
 
 - Jamais de ROM, d'assets ou de binaires du jeu sur GitHub : la publication refuse un repo qui suit des fichiers
-  `.nds`, `.bin`, `extract/`, `build/`… ou des fichiers de plus de 2 Mo.
+  `.nds`, `.bin`, `extract/`, `build/`… ou des fichiers de plus de 20 Mo.
 - Ne jamais utiliser de code source fuité. Salle blanche : le binaire et les projets publics seulement.
 - Aucun commit sans `VERIFY PASSED`.
 
