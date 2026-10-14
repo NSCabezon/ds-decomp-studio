@@ -128,7 +128,11 @@ def chat_loop(work, name, addr, profile, out0):
         try:
             reply = ask(msgs, min(1.0, 0.4 + 0.1 * len(notes)), deadline)
         except Exception as e:
-            log(f"  Ollama ne repond pas ({e}) : lancez Ollama")
+            if "timed out" in str(e):
+                log(f"  {name}: pas de reponse d'Ollama avant la limite de temps (modele en chargement, ou Ollama traite"
+                    " les agents un par un : augmenter les minutes ou OLLAMA_NUM_PARALLEL)")
+            else:
+                log(f"  {name}: Ollama ne repond pas ({e}) : lancez Ollama")
             return False
         m = re.search(r"```[a-zA-Z]*\s*\n(.*?)```", reply, re.S)
         if not m:
