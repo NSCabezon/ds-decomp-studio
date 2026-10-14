@@ -80,7 +80,7 @@ def view(g) -> list[dict]:
     """Blocks with their live state: free / claimed / expired / done, and progress."""
     data = load(g)
     if not data["blocks"] and g.ready:
-        data = rebuild(g, commit=False)
+        data = rebuild(g)  # first look at a game: its blocks are shared through its repo
     rows = {r["name"]: r for r in g.functions()}
     cl, fin = claims(g), finished(g)
     out = []

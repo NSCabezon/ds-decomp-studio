@@ -206,6 +206,19 @@ def touch_claims():
             p.write_text(json.dumps(c, indent=1) + "\n", encoding="utf-8", newline="\n")
 
 
+def release_blocks():
+    """Qwen is done with its blocks: give them back to the queue (what is left can be taken by someone else)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from dsstudio import blocks as studio_blocks, games as studio_games
+        g = studio_games.Game(ROOT)
+        for b in BLOCKS:
+            r = studio_blocks.release(g, b)
+            log(f"bloc {b} rendu a la queue" + (f" ({r.get('error') or r.get('warning')})" if r.get("error") or r.get("warning") else ""))
+    except Exception as e:  # never lose the matches because of the queue
+        log(f"impossible de rendre les blocs ({e}) : les rendre depuis l'app")
+
+
 class Integrator(threading.Thread):
     """Single writer of the project: batches of matches -> verify -> commit. Failing batches are split."""
 
@@ -304,7 +317,7 @@ def main():
         log("fichier STOP trouve : arret apres les fonctions en cours.")
     integ.q.put(None)
     integ.join()
-    touch_claims()
+    release_blocks()
     log(f"fini : {len(integ.won)} nouvelles fonctions sur {tried[0]} essayees"
         + (f" ; rejetees au verify : {', '.join(integ.lost)}" if integ.lost else ""))
 
