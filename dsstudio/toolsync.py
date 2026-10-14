@@ -50,16 +50,21 @@ def template_version() -> str:
 def sync(g, commit=True, push=True, log=print) -> dict:
     """Copies gametools/ into the game. Replaced files are kept in build/tools_backup/<date>/."""
     changed = status(g)["behind"]
+    if changed:
+        backup = g.path / "build" / "tools_backup" / time.strftime("%Y%m%d-%H%M%S")
+        backup.mkdir(parents=True, exist_ok=True)
+        for name in changed:
+            cur = g.path / "tools" / name
+            if cur.exists():
+                shutil.copy2(cur, backup / name)
+            cur.write_bytes(_norm((SOURCE / name).read_bytes()))
+        log(f"{g.id}: {', '.join(changed)} mis a jour (anciens fichiers dans {backup.relative_to(g.path)})")
+    # Commit every shared tool that differs from the last commit (also copies made earlier without a commit)
+    dirty = set(gitutil.git(g.path, "status", "--porcelain", "--", *[f"tools/{n}" for n in tool_names()])
+                .stdout.replace("\\", "/").split())
+    changed = [n for n in tool_names() if f"tools/{n}" in dirty]
     if not changed:
         return {"ok": True, "changed": []}
-    backup = g.path / "build" / "tools_backup" / time.strftime("%Y%m%d-%H%M%S")
-    backup.mkdir(parents=True, exist_ok=True)
-    for name in changed:
-        cur = g.path / "tools" / name
-        if cur.exists():
-            shutil.copy2(cur, backup / name)
-        cur.write_bytes(_norm((SOURCE / name).read_bytes()))
-    log(f"{g.id}: {', '.join(changed)} mis a jour (anciens fichiers dans {backup.relative_to(g.path)})")
     if commit:
         paths = [f"tools/{n}" for n in changed]
         gitutil.git(g.path, "add", "--", *paths)
