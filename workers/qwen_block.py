@@ -52,7 +52,8 @@ You receive a C file and the ARM disassembly of the ORIGINAL function (TARGET) n
 (CANDIDATE); lines marked * differ. Rewrite the C so that the compiled code becomes identical.
 Allowed changes: loop form (for/while/do-while, *p++ vs index), declaration order, temporaries, types
 (s32/u32/s16/u16/s8/u8, signed/unsigned), casts, splitting or merging expressions, returning a value.
-Keep the first lines (#define / #include) and the function name. ASCII only.
+Keep the first lines (#define / #include) and the function name. Never make the function static
+(the game exports it). ASCII only.
 Answer with the COMPLETE new C file in a single ```c code block and nothing else."""
 
 
@@ -115,6 +116,11 @@ def ask(messages, temp, deadline):
         return json.loads(r.read())["message"]["content"]
 
 
+def unstatic(code, name):
+    """The original symbol is global: `static` would compile to the same bytes but break the link (local symbol)."""
+    return re.sub(rf"(?<!\w)static\s+(?=[^;{{}}]*(?<!\w){re.escape(name)}\s*\()", "", code)
+
+
 def chat_loop(work, name, addr, profile, out0):
     """Asks for a full new file each time, always from the BEST version so far, with the failed attempts listed."""
     deadline = time.time() + args.minutes * 60
@@ -141,6 +147,7 @@ def chat_loop(work, name, addr, profile, out0):
                 return False
             continue
         code = "".join(c for c in m.group(1) if ord(c) < 128)
+        code = unstatic(code, name)
         work.write_text(code, encoding="utf-8", newline="\n")
         attempt += 1
         ok, out = probe(work, name, addr, profile)
