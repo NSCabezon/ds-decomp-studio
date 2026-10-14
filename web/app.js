@@ -133,7 +133,7 @@ async function viewGame() {
     ${g.remote ? `<a class="tag gh" target="_blank" href="${esc(g.remote.replace(/\.git$/, ""))}">GitHub</a>` : '<span class="tag">local</span>'}</span></div>
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions</div></div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
-    ${["moulinette", "auto", "verify", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(O.jobdefs[k].desc)}" onclick="runJob('${k}')">${esc(O.jobdefs[k].label)}</button>`).join("")}
+    ${["moulinette", "auto", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(O.jobdefs[k].desc)}" onclick="runJob('${k}')">${esc(O.jobdefs[k].label)}</button>`).join("")}
     ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
@@ -276,9 +276,12 @@ async function subMap() {
 const JOB_OPTS = {
   auto: [["jobs", "Coeurs utilises (-j)", "number", 16], ["permute", "Permuter sur N near misses (0 = non)", "number", 0],
     ["minutes", "Minutes de permuter par fonction", "number", 2], ["fresh", "Tout refaire (ignorer le cache des echecs)", "check", false],
-    ["dry_run", "Essai a blanc (ne change rien)", "check", false], ["force", "Relancer meme si l'auto-match est marque termine", "check", false]],
+    ["dry_run", "Essai a blanc (ne change rien)", "check", false],
+    ["cached_only", "Seulement integrer les matches deja trouves (reprise rapide)", "check", false], ["force", "Relancer meme si l'auto-match est marque termine", "check", false]],
   permute: [["permute", "Nombre de near misses", "number", 10], ["minutes", "Minutes par fonction", "number", 2], ["jobs", "Coeurs (-j)", "number", 16],
     ["force", "Relancer meme si marque termine", "check", false]],
+  culprits: [["fix", "Retirer les fichiers fautifs (non commites) et reconstruire", "check", true],
+    ["any", "Autoriser aussi les fichiers deja commites (prudence)", "check", false]],
   moulinette: [["push", "Pousser sur GitHub si la verification passe", "check", true], ["permute_near", "Permuter sur N near misses (0 = non)", "number", 0],
     ["near_minutes", "Minutes de permuter par near miss", "number", 5], ["restart", "Oublier les echecs deja essayes", "select", ["", "all", "auto", "permuter", "qwen"]],
     ["no_drafts", "Sans brouillons m2c", "check", false], ["no_auto", "Sans auto-match", "check", false], ["no_commit", "Verifier seulement (pas de commit)", "check", false]],

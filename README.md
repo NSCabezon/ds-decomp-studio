@@ -60,6 +60,23 @@ python studio.py queue
 python studio.py publish <jeu>
 ```
 
+## Outils partagés (`gametools/`)
+
+Les outils de matching (`auto_match.py`, `match.py`, `probe_compiler.py`, `draft.py`, `permute.py`,
+`find_culprits.py`…) ont **une seule version**, dans `gametools/`. Ils lisent ce qui est propre au jeu (version
+`usa`/`eu`/`jp`, nom de la ROM, zone `.text`) dans le projet via `tools/project.py` : les fichiers sont donc
+identiques dans tous les jeux. Chaque jeu en garde une copie dans son repo (un clone d'un seul jeu fonctionne), et
+le bouton « Mettre à jour les outils » (ou `python studio.py sync-tools`) recopie `gametools/` partout.
+Pour améliorer un outil : modifier `gametools/`, puis synchroniser. `tools/configure.py` reste propre à chaque jeu.
+
+### Quand la ROM ne se reconstruit plus (`find_culprits.py`)
+
+Une fonction peut être à 100 % dans objdiff et casser quand même la ROM (literal pool dans un autre ordre, fonction
+`static`, fichier qui décale tout). `python tools/find_culprits.py` compare chaque module reconstruit avec
+l'original, octet par octet, et désigne le fichier fautif en **une seule compilation**. `--fix` retire les fichiers
+fautifs non commités (rangés dans `build/culprits/`) et recommence jusqu'à ce que la ROM soit identique.
+auto_match l'utilise tout seul : un lot dont le verify échoue n'est plus annulé en entier.
+
 ## Installation sur un autre PC
 
 L'app attend ce dossier à côté de la boîte à outils DS :

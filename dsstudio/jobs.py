@@ -23,6 +23,7 @@ DEFS = {
     "build": ("Compiler (ninja)", "game", 120, "reconstruit la ROM"),
     "verify": ("Verifier (VERIFY PASSED)", "game", 90, "ROM identique + fichiers complets a 100 %"),
     "dis": ("Desassembler", "game", 60, "regenere build/<ver>/asm"),
+    "culprits": ("Trouver ce qui casse la ROM", "game", 900, "compare la ROM reconstruite octet par octet et retire les fichiers fautifs"),
     "auto": ("Auto-match", "game", 900, "m2c + compile + compare sur toutes les fonctions"),
     "permute": ("Auto-match + permuter", "game", 2400, "permuter sur les N near misses"),
     "moulinette": ("Moulinette complete", "game", 1800, "build, brouillons, auto-match, verify, commit (+push)"),
@@ -52,6 +53,8 @@ def command(jid: str, game, p: dict) -> str:
         return "ninja"
     if jid == "verify":
         return "python tools/match.py verify"
+    if jid == "culprits":
+        return "python tools/find_culprits.py" + (" --fix" if p.get("fix") else "") + (" --any" if p.get("any") else "")
     if jid == "dis":
         return f"rm -rf build/{v}/asm; ninja dis"
     if jid in ("auto", "permute"):
@@ -63,6 +66,8 @@ def command(jid: str, game, p: dict) -> str:
             cmd += f" --permute {int(p.get('permute') or p.get('n') or 10)} --minutes {float(p.get('minutes') or 2)}"
         if p.get("dry_run"):
             cmd += " --dry-run"
+        if p.get("cached_only"):
+            cmd += " --cached-only"
         return cmd
     if jid == "moulinette":
         cmd = f"python {_q(MOULINETTE.as_posix())} --game {_q(game.id)}"
