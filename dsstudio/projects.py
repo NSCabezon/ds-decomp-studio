@@ -100,6 +100,17 @@ def unsafe_files(g) -> list[str]:
     return bad
 
 
+TOPICS = ["decompilation", "matching-decompilation", "nintendo-ds", "reverse-engineering", "ds-decomp-studio"]
+
+
+def set_topics(full_name: str):
+    """Same topics on every game repo (the topic ds-decomp-studio is how the app finds published games)."""
+    args = ["gh", "repo", "edit", full_name]
+    for t in TOPICS:
+        args += ["--add-topic", t]
+    return subprocess.run(args, capture_output=True, text=True)
+
+
 def repo_name(g) -> str:
     return f"{g.id}-decomp"
 
@@ -133,8 +144,7 @@ def publish(game_id: str, public=True, log=print) -> dict:
     r = gitutil.git(g.path, "push", "-q", "-u", "origin", "main", timeout=600)
     if r.returncode:
         return {"error": r.stderr.strip()[-400:]}
-    subprocess.run(["gh", "repo", "edit", f"{owner}/{name}", "--add-topic", "ds-decomp-studio",
-                    "--add-topic", "decompilation", "--add-topic", "nintendo-ds"], capture_output=True)
+    set_topics(f"{owner}/{name}")
     return {"ok": True, "remote": f"https://github.com/{owner}/{name}"}
 
 

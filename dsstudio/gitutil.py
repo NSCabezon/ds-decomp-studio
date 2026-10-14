@@ -26,12 +26,32 @@ def pull(repo: Path) -> str:
     return ""
 
 
+PRECOMMIT = ".pre-commit-config.yaml"
+EXCLUDE_LINE = "exclude: ^\\.studio/  # queue data of DS Decomp Studio (clang-format would reformat the JSON)\n"
+
+
+def ensure_ci_exclude(repo: Path) -> bool:
+    """The game repos run clang-format in CI, and clang-format also formats .json files: keep .studio/ out of
+    pre-commit. Returns True if the config file was changed."""
+    p = repo / PRECOMMIT
+    if not p.exists():
+        return False
+    text = p.read_text(encoding="utf-8")
+    if "^\\.studio/" in text:
+        return False
+    p.write_text(EXCLUDE_LINE + text, encoding="utf-8", newline="\n")
+    return True
+
+
 def commit_studio(repo: Path, message: str) -> str:
-    """Commits the .studio folder only. Returns an error message or ''."""
-    git(repo, "add", "-A", "--", config.STUDIO_DIR)
-    if not git(repo, "diff", "--cached", "--name-only", "--", config.STUDIO_DIR).stdout.strip():
+    """Commits the .studio folder only (plus the pre-commit exclusion of .studio). Returns an error message or ''."""
+    paths = [config.STUDIO_DIR]
+    if ensure_ci_exclude(repo) or git(repo, "diff", "--name-only", "--", PRECOMMIT).stdout.strip():
+        paths.append(PRECOMMIT)
+    git(repo, "add", "-A", "--", *paths)
+    if not git(repo, "diff", "--cached", "--name-only", "--", *paths).stdout.strip():
         return ""
-    r = git(repo, "commit", "-q", "-m", message, "--", config.STUDIO_DIR)
+    r = git(repo, "commit", "-q", "-m", message, "--", *paths)
     return "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-400:]
 
 
