@@ -1033,6 +1033,18 @@ def main():
     results = [cached[keys[f[0]]] for f in todo if keys[f[0]] in cached]
     pending = [f for f in todo if keys[f[0]] not in cached]
     if args.cached_only:
+        # The asm text (part of the cache key) can change between dsd runs: in this mode take back the matches by
+        # name + size + address. Nothing is trusted blindly: verify and find_culprits check the result.
+        by_name = {}
+        for line in CACHE.read_text(encoding="utf-8", errors="replace").splitlines() if CACHE.exists() else []:
+            try:
+                r = tuple(json.loads(line)["r"])
+            except Exception:
+                continue
+            if r[3] == "match":
+                by_name[(r[0], r[1], r[2])] = r
+        have = {r[0] for r in results}
+        results += [by_name[f] for f in todo if f[0] not in have and f in by_name]
         pending = []
     print(f"Trying {len(pending)} functions ({len(results)} already in the cache)...", flush=True)
     WORK.mkdir(parents=True, exist_ok=True)
