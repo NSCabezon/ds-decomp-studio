@@ -20,6 +20,7 @@ def brief(g, block_id: str) -> str:
         "- Activate the environment first: `source \"" + config.ENV_SH.as_posix() + "\"` (Git Bash).",
         "- Never commit unless `python tools/match.py verify` prints `VERIFY PASSED`.",
         "- Only commit `src/`, `include/` and `config/` files you changed (never `git add -A`). ASCII only.",
+        "- Format before verifying: `pre-commit run clang-format --files <your .c files>` (the CI checks it).",
         "- Never use leaked source code. Clean-room: from the binary and public projects only.",
         "- A function you cannot match: leave it, note why in the claim (`studio.py touch ... --note`).",
         f"- When finished: `python \"{(config.STUDIO / 'studio.py').as_posix()}\" done {g.id} {block_id}`.",

@@ -13,6 +13,7 @@ import argparse
 import difflib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -146,6 +147,10 @@ def integrate_and_verify(name, size, addr, source):
     import auto_match as am
     saved = (am.DELINKS.read_bytes(), am.COMPILERS_TXT.read_bytes() if am.COMPILERS_TXT.exists() else b"")
     created = am.integrate([(name, size, addr, source)])
+    # Same style as the CI (clang-format), so the commit never breaks the lint check; verify runs after it
+    pc = shutil.which("pre-commit")
+    if pc:
+        run([pc, "run", "clang-format", "--files", *[str(p.relative_to(ROOT)) for p in created]])
     run([sys.executable, "tools/configure.py", VERSION])
     v = run([sys.executable, "tools/match.py", "verify"])
     if v.returncode == 0 and "VERIFY PASSED" in v.stdout:
