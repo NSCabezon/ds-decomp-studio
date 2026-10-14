@@ -29,9 +29,20 @@ def game_view(gid):
     return {"game": {**g.info(), "tools_behind": toolsync.status(g)["behind"]}, "blocks": bl, "per_level": per_level, "generation": blocks.load(g).get("generation", 0)}
 
 
-def function_list(gid, level, q, state, limit):
+KINDS_FILTER = {  # "what is left" split by what can work on it
+    "auto": lambda r: r["auto_tools"],                                   # ARM, main module: automatic tools
+    "thumb": lambda r: r["mode"] == "thumb",
+    "overlay": lambda r: r["module"].startswith("ov"),
+    "tcm": lambda r: r["module"] in ("itcm", "dtcm"),
+    "manual": lambda r: not r["auto_tools"],                             # everything the tools do not handle
+}
+
+
+def function_list(gid, level, q, state, limit, kind=""):
     g = games.get(gid)
     rows = g.functions()
+    if kind in KINDS_FILTER:
+        rows = [r for r in rows if KINDS_FILTER[kind](r)]
     if state == "done":
         out = [dict(r) for r in rows if r["done"]]
     else:
@@ -59,6 +70,19 @@ def asm_of(gid, name):
         if m:
             return m.group(0)
     return "(assembleur introuvable : lancez la tache 'Desassembler' sur ce jeu)"
+
+
+def warm_up():
+    """Computes in the background what the first page views need (functions, cross-game twins, tool state of every
+    game): the first click on a game is then as fast as the next ones."""
+    for g in games.all_games():
+        try:
+            if g.ready:
+                g.functions()
+                games.portable(g)
+                toolsync.status(g)
+        except Exception:
+            traceback.print_exc()
 
 
 class H(BaseHTTPRequestHandler):
@@ -91,7 +115,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(game_view(q["id"]))
             if p == "functions":
                 return self.send(function_list(q["game"], q.get("level"), q.get("q", ""), q.get("state", "todo"),
-                                               int(q.get("limit", 300))))
+                                               int(q.get("limit", 300)), q.get("kind", "")))
             if p == "block":
                 g = games.get(q["game"])
                 return self.send({"functions": blocks.functions_of(g, q["id"]), "brief": brief.brief(g, q["id"])})
@@ -196,6 +220,7 @@ def serve(open_browser=True):
             webbrowser.open(url)
         return
     jobs.start_scheduler()
+    threading.Thread(target=warm_up, daemon=True).start()
     print(f"DS Decomp Studio sur {url}  (Ctrl+C pour arreter)")
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()

@@ -128,10 +128,20 @@ class Game:
         return {"ok": True, "note": ""}
 
     # ---- functions ----
-    def symbols(self):
-        p = self.cfg / "symbols.txt"
-        if not p.exists():
-            return []
+    def modules(self) -> list[tuple[str, Path]]:
+        """[(module, its config folder)]: "main" (the ARM9 main module), "itcm", "dtcm", "ov000"... Overlays share
+        addresses with each other, so a function is identified by module + address."""
+        out = [("main", self.cfg)] if (self.cfg / "symbols.txt").exists() else []
+        for sub in ("itcm", "dtcm"):
+            if (self.cfg / sub / "symbols.txt").exists():
+                out.append((sub, self.cfg / sub))
+        ov = self.cfg / "overlays"
+        if ov.exists():
+            out += [(d.name, d) for d in sorted(ov.iterdir()) if (d / "symbols.txt").exists()]
+        return out
+
+    def _symbols_of(self, folder: Path):
+        p = folder / "symbols.txt"
 
         def parse():
             out = []
@@ -140,14 +150,22 @@ class Game:
                 if m and m.group(3):
                     out.append((m.group(1), int(m.group(4), 16), int(m.group(3), 16), m.group(2)))
             return out
-        return _cached(("sym", str(p)), p, parse)
+        return _cached(("sym", str(p)), p, parse) if p.exists() else []
 
-    def done_ranges(self):
-        p = self.cfg / "delinks.txt"
+    def _ranges_of(self, folder: Path):
+        p = folder / "delinks.txt"
         if not p.exists():
             return []
         return _cached(("dl", str(p)), p, lambda: sorted(
             (int(a, 16), int(b, 16), f) for f, a, b in DELINK_RE.findall(p.read_text(encoding="utf-8", errors="replace"))))
+
+    def symbols(self):
+        """(name, addr, size, mode) of the main module (the one the automatic tools and the fingerprints cover)."""
+        return self._symbols_of(self.cfg) if (self.cfg / "symbols.txt").exists() else []
+
+    def done_ranges(self):
+        """Matched (start, end, file) of the main module."""
+        return self._ranges_of(self.cfg)
 
     def auto_status(self) -> dict:
         """{name: 'near'|'size'|'compile'|'m2c'} from the last auto_match pass (build/auto/status.json)."""
@@ -160,20 +178,28 @@ class Game:
             return {}
 
     def functions(self) -> list[dict]:
-        """Every function of the main ARM9 module with its state. The tools (auto_match, verify) work on that module."""
-        syms, ranges, st = self.symbols(), self.done_ranges(), self.auto_status()
-        dl = self.cfg / "delinks.txt"
-        key = ("fns", self.id, dl.stat().st_mtime if dl.exists() else 0, len(syms), id(st))
+        """Every function of every ARM9 module (main, ITCM, DTCM, overlays; ARM and Thumb) with its state.
+        `uid` identifies a function across modules: its address in the main module, "<module>:<addr>" elsewhere.
+        The automatic tools (auto_match, donor_match) only handle ARM functions of the main module: `auto_tools`."""
+        mods, st = self.modules(), self.auto_status()
+        stamp = tuple((f / n).stat().st_mtime if (f / n).exists() else 0 for _m, f in mods
+                      for n in ("symbols.txt", "delinks.txt"))
+        key = ("fns", self.id, hash(stamp), id(st))
         if key in _cache:
             return _cache[key]
-        starts = [r[0] for r in ranges]
         shared = shared_counts(FP_KEY.get(self.id))
         rows = []
-        for name, addr, size, mode in syms:
-            i = bisect.bisect_right(starts, addr) - 1
-            f = ranges[i][2] if i >= 0 and ranges[i][0] <= addr < ranges[i][1] else None
-            rows.append({"name": name, "addr": addr, "size": size, "mode": mode, "done": f is not None, "file": f,
-                         "auto": st.get(name, ""), "shared": shared.get(addr, 0)})
+        for module, folder in mods:
+            ranges = self._ranges_of(folder)
+            starts = [r[0] for r in ranges]
+            main = module == "main"
+            for name, addr, size, mode in self._symbols_of(folder):
+                i = bisect.bisect_right(starts, addr) - 1
+                f = ranges[i][2] if i >= 0 and ranges[i][0] <= addr < ranges[i][1] else None
+                rows.append({"name": name, "addr": addr, "size": size, "mode": mode, "module": module,
+                             "uid": addr if main else f"{module}:{addr:08x}", "done": f is not None, "file": f,
+                             "auto": st.get(name, ""), "shared": shared.get(addr, 0) if main else 0,
+                             "auto_tools": main and mode == "arm"})
         _cache[key] = rows
         return rows
 
@@ -181,8 +207,12 @@ class Game:
         rows = self.functions() if self.ready else []
         tot, got = len(rows), sum(r["done"] for r in rows)
         tb, gb = sum(r["size"] for r in rows), sum(r["size"] for r in rows if r["done"])
+        main = [r for r in rows if r["module"] == "main"]
+        mb, mgb = sum(r["size"] for r in main), sum(r["size"] for r in main if r["done"])
         return {"functions": tot, "matched": got, "bytes": tb, "matched_bytes": gb,
-                "pct_fn": round(100 * got / tot, 2) if tot else 0, "pct_code": round(100 * gb / tb, 2) if tb else 0}
+                "pct_fn": round(100 * got / tot, 2) if tot else 0, "pct_code": round(100 * gb / tb, 2) if tb else 0,
+                "pct_main": round(100 * mgb / mb, 2) if mb else 0, "modules": len({r["module"] for r in rows}),
+                "left_manual": sum(1 for r in rows if not r["done"] and not r["auto_tools"])}
 
     def info(self) -> dict:
         return {"id": self.id, "title": self.title, "version": self.version, "code": self.code, "ready": self.ready,
@@ -228,9 +258,33 @@ def shared_counts(key) -> dict:
     return _cached(("shared", key), config.FPDB, q)
 
 
+def donor_hits(game: Game) -> dict:
+    """{function name: [donor repo, donor function, donor file]} written by `tools/donor_match.py --list`: functions
+    with a twin in another public decompilation (decomps-externes/), reusable with the "donors" task."""
+    p = game.path / "build" / "donor" / "hits.json"
+    if not p.exists():
+        return {}
+    try:
+        return _cached(("donors", str(p)), p, lambda: json.loads(p.read_text(encoding="utf-8")))
+    except Exception:
+        return {}
+
+
 def portable(game: Game) -> dict:
-    """{addr: (other game id, its function name, its source file)} for unmatched functions whose exact twin is
-    already matched in another project: the source can be copied from there."""
+    """{addr: (source, function name, source file)} for unmatched functions whose exact twin is already matched
+    elsewhere: in another of our projects (source = game id), or in an external decompilation (source =
+    "donor:<repo>", see donor_hits)."""
+    out = dict(_portable_projects(game))
+    hits = donor_hits(game)
+    if hits:
+        for name, addr, _size, _mode in game.symbols():
+            if name in hits and addr not in out:
+                repo, dname, rel = hits[name]
+                out[addr] = ("donor:" + repo, dname, rel)
+    return out
+
+
+def _portable_projects(game: Game) -> dict:
     key = FP_KEY.get(game.id)
     if not key or not config.FPDB.exists():
         return {}

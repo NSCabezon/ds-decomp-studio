@@ -25,6 +25,9 @@ def brief(g, block_id: str) -> str:
         "- A function you cannot match: leave it, note why in the claim (`studio.py touch ... --note`).",
         f"- When finished: `python \"{(config.STUDIO / 'studio.py').as_posix()}\" done {g.id} {block_id}`.",
         "",
+        "Functions whose note names an external decompilation (decomps-externes/) are matched automatically:",
+        f"`python tools/donor_match.py --names <f1,f2,...>` (or the task \"Reprendre les matchs des autres decomps\").",
+        "",
         "## How to match one function",
         f"1. Assembly: `build/{v}/asm/` (run `ninja dis` if missing). Draft: `build/auto/near/<name>.c`, "
         "`build/drafts/<name>.c`, or `python tools/draft.py <name>`.",
@@ -46,9 +49,19 @@ def brief(g, block_id: str) -> str:
         note = ""
         if f.get("port"):
             p = f["port"]
-            note = f"same code matched in {p['game']}: `{p['file']}` ({p['name']})"
+            if p["game"].startswith("donor:"):
+                note = (f"same code in {p['game'][6:]} ({p['name']}, `{p['file']}`): "
+                        f"`python tools/donor_match.py --names {f['name']}`")
+            else:
+                note = f"same code matched in {p['game']}: `{p['file']}` ({p['name']})"
         elif f.get("shared", 0) >= 2:
             note = f"SDK, in {f['shared']} other games"
+        if f.get("module", "main") != "main":
+            note = (note + "; " if note else "") + (f"module {f['module']}: delinks in "
+                                                   f"config/{v}/arm9/{'overlays/' if f['module'].startswith('ov') else ''}"
+                                                   f"{f['module']}/delinks.txt")
+        if f.get("mode") == "thumb":
+            note = (note + "; " if note else "") + "Thumb: compile with `-thumb` (no automatic tool)"
         lines.append(f"| {f['name']} | 0x{f['addr']:08x} | {f['size']} | {f['mode']} | "
                      f"{difficulty.LEVELS[f.get('level', 1)]['label']} | {difficulty.AUTO_LABEL.get(f['auto'], f['auto'])} | {note} |")
     done = [f["name"] for f in fns if f["done"]]

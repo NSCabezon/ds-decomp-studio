@@ -6,13 +6,13 @@ from . import config, difficulty, games
 
 
 def memory_map(g) -> dict:
-    """Every function of the main module as [addr, size, state]; state -1 = matched, else difficulty level."""
-    rows = g.functions()
+    """Every function of the main module as [addr, size, state, name]; state -1 = matched, else difficulty level."""
+    rows = [r for r in g.functions() if r["module"] == "main"]  # one address space (overlays overlap)
     port = games.portable(g)
     out = []
     for r in rows:
         lvl = -1 if r["done"] else difficulty.rate(dict(r), port)["level"]
-        out.append([r["addr"], r["size"], lvl])
+        out.append([r["addr"], r["size"], lvl, r["name"]])
     return {"functions": out, "start": min((r[0] for r in out), default=0),
             "end": max((r[0] + r[1] for r in out), default=0)}
 

@@ -8,7 +8,17 @@ const TABS = [["games", "Jeux"], ["game", "Travailler"], ["queue", "Queue"], ["e
 const ST = {free: "libre", claimed: "pris", expired: "expire", done: "termine", queued: "en attente", running: "en cours",
   failed: "echec", stopped: "arrete", interrupted: "interrompu", cancelled: "annule"};
 let O = null, G = null, J = [], tab = location.hash.slice(1) || "games", sub = "blocks";
-let fLevel = null, fState = "open", fnLevel = "", fnQuery = "", fnState = "todo", openLog = null;
+let fLevel = null, fState = "open", fnLevel = "", fnQuery = "", fnState = "todo", fnKind = "", openLog = null;
+let gSort = (() => { try { return JSON.parse(localStorage.getItem("gSort")) || ["pct", -1]; } catch (e) { return ["pct", -1]; } })();
+const G_SORTS = {title: g => g.title.toLowerCase(), studio: g => (g.studio || "~").toLowerCase(), rom: g => g.rom.ok ? 0 : 1,
+  functions: g => g.functions, matched: g => g.matched, pct: g => g.pct_code, left: g => g.functions - g.matched, github: g => g.remote ? 0 : 1};
+const ASC_FIRST = ["title", "studio", "rom", "github"];
+function setSort(k, dir) {
+  gSort = [k, dir || (gSort[0] === k ? -gSort[1] : ASC_FIRST.includes(k) ? 1 : -1)];
+  try { localStorage.setItem("gSort", JSON.stringify(gSort)); } catch (e) {}
+  render();
+}
+const th = (k, label, cls = "") => `<th class="sort ${cls} ${gSort[0] === k ? "on" : ""}" onclick="setSort('${k}')">${label}${gSort[0] === k ? (gSort[1] > 0 ? " &#9650;" : " &#9660;") : ""}</th>`;
 
 async function api(path, body) {
   try {
@@ -27,6 +37,8 @@ function modal(html) { $("#modalbody").innerHTML = html; $("#modal").classList.a
 $("#modal").onclick = e => { if (e.target.id === "modal") $("#modal").classList.remove("on"); };
 const closeModal = () => $("#modal").classList.remove("on");
 const LV = n => O.levels[n] || {label: "?"};
+const JD = k => (O.jobdefs && O.jobdefs[k]) || {label: k, desc: "(redemarre le studio pour cette tache)"};
+const portNote = p => p.game.startsWith("donor:") ? "decomp externe " + esc(p.game.slice(6)) + " (" + esc(p.name) + ")" : "copier depuis " + esc(p.game);
 const game = () => O && O.settings.active_game;
 const pctBar = p => `<div class="pct"><div class="bar"><i style="width:${Math.min(p, 100)}%"></i></div><b>${p.toFixed(2)}%</b></div>`;
 
@@ -72,12 +84,17 @@ function viewGames() {
   h += `<div class="card"><h3>Mes jeux</h3><p class="hint">Clique sur un jeu pour travailler dessus. "Retirer" le range dans projets/_archive (rien n'est supprime).</p>
   ${behind ? `<div class="btns" style="margin-bottom:8px"><span class="tag ko">${behind} jeux ont des outils en retard sur rayman-rr (auto_match...)</span>
     <button class="btn small" onclick="api('run',{id:'sync_all'}).then(r=>r.n&&toast('Mise a jour des outils lancee (onglet Queue)'))">Tout mettre a jour</button></div>` : ""}
-  <table><tr><th>Jeu</th><th>Studio</th><th>Etat ROM</th><th class="num">Fonctions</th><th>Code matche</th><th>GitHub</th><th></th></tr>`;
-  for (const g of [...gs].sort((a, b) => b.pct_code - a.pct_code || a.title.localeCompare(b.title))) {
+  <div class="btns" style="margin-bottom:8px"><span class="hint">Trier par</span>
+    <select onchange="setSort(this.value, ASC_FIRST.includes(this.value) ? 1 : -1)">${[["pct", "% de code matche"], ["matched", "fonctions matchees"], ["left", "fonctions restantes"], ["functions", "taille (fonctions)"], ["title", "nom"], ["studio", "studio"], ["rom", "etat ROM"], ["github", "GitHub"]].map(([k, l]) => `<option value="${k}" ${gSort[0] === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+    <button class="btn small sec" onclick="setSort(gSort[0], -gSort[1])">${gSort[1] > 0 ? "croissant &#9650;" : "decroissant &#9660;"}</button></div>
+  <table><tr>${th("title", "Jeu")}${th("studio", "Studio")}${th("rom", "Etat ROM")}${th("matched", "Fonctions", "num")}${th("pct", "Code matche")}${th("github", "GitHub")}<th></th></tr>`;
+  const key = G_SORTS[gSort[0]] || G_SORTS.pct;
+  const order = (a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * gSort[1] || a.title.localeCompare(b.title); };
+  for (const g of [...gs].sort(order)) {
     h += `<tr class="click" onclick="selectGame('${g.id}')"><td><b>${esc(g.title)}</b> ${g.id === game() ? '<span class="tag ok">actif</span>' : ""}<div class="hint">${esc(g.id)} &middot; ${esc(g.code)} ${esc(g.version || "")}</div></td>
       <td class="hint">${esc(g.studio)}</td>
       <td>${g.rom.ok ? '<span class="tag ok">ROM OK</span>' : `<span class="tag ko" title="${esc(g.rom.note)}">${esc(g.rom.note || "KO")}</span>`}</td>
-      <td class="num">${fmt(g.matched)} / ${fmt(g.functions)}</td><td>${pctBar(g.pct_code)}</td>
+      <td class="num">${fmt(g.matched)} / ${fmt(g.functions)}${g.modules > 1 ? `<div class="hint">${g.modules} modules</div>` : ""}</td><td>${pctBar(g.pct_code)}${g.modules > 1 ? `<div class="hint">module principal : ${g.pct_main.toFixed(2)} %</div>` : ""}</td>
       <td>${g.remote ? `<a class="tag gh" href="${esc(g.remote.replace(/\.git$/, ""))}" target="_blank" onclick="event.stopPropagation()">GitHub</a>` : '<span class="hint">local</span>'}</td>
       <td onclick="event.stopPropagation()"><button class="btn small sec" onclick="archiveGame('${g.id}')">Retirer</button></td></tr>`;
   }
@@ -131,9 +148,10 @@ async function viewGame() {
     <span class="hint">${esc(g.id)} &middot; ${esc(g.code)} ${esc(g.version)} &middot; ${esc(g.studio)} &middot;
     ${g.rom.ok ? '<span class="tag ok">ROM OK</span>' : `<span class="tag ko">${esc(g.rom.note)}</span>`}
     ${g.remote ? `<a class="tag gh" target="_blank" href="${esc(g.remote.replace(/\.git$/, ""))}">GitHub</a>` : '<span class="tag">local</span>'}</span></div>
-    <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions</div></div></div>
+    <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions${g.modules > 1 ? ` (${g.modules} modules, principal ${g.pct_main.toFixed(2)} %)` : ""}</div>
+    ${g.left_manual ? `<div class="hint" style="text-align:right"><a href="#game" onclick="sub='functions';fnKind='manual';render();return false">${fmt(g.left_manual)} a faire a la main</a> (Thumb, overlays, ITCM : pas d'outil auto)</div>` : ""}</div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
-    ${["moulinette", "auto", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(O.jobdefs[k].desc)}" onclick="runJob('${k}')">${esc(O.jobdefs[k].label)}</button>`).join("")}
+    ${["moulinette", "auto", "donors", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
     ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
@@ -170,6 +188,7 @@ function subBlocks() {
       ${c ? `<div class="hint">${esc(c.who)} (${esc(O.kinds[c.kind] || c.kind)}) &middot; ${ago(c.touched)}${c.note ? " &middot; " + esc(c.note) : ""}</div>` : ""}
       <div class="btns">
         <button class="btn small sec" onclick="openBlock('${b.id}')">Voir / brief</button>
+        ${b.level === 0 && b.left ? `<button class="btn small" title="Reprend les fonctions de ce bloc deja decompilees ailleurs (compile + compare + verify)" onclick="runJob('donors',{block:'${b.id}'})">Reprendre</button>` : ""}
         ${b.state === "free" || b.state === "expired" ? `<button class="btn small" onclick="claimBlock('${b.id}','human')">Prendre</button>
           <button class="btn small sec" onclick="qwenBlock('${b.id}')" title="Qwen (Ollama local) travaille sur ce bloc">Qwen</button>` : ""}
         ${mine || (c && c.kind !== "human") ? `<button class="btn small green" onclick="releaseBlock('${b.id}',true)">Termine</button>
@@ -226,7 +245,7 @@ async function openBlock(id) {
     <table style="margin-top:10px"><tr><th>Fonction</th><th>Adresse</th><th class="num">Taille</th><th>Niveau</th><th>auto_match</th><th>Note</th></tr>
     ${d.functions.map(f => `<tr class="click" onclick="showAsm('${esc(f.name)}')"><td>${f.done ? "&#10004; " : ""}<b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td>
       <td class="num">${f.size}</td><td>${f.done ? '<span class="hint">matchee</span>' : `<span class="c${f.level}">${esc(LV(f.level).label)}</span>`}</td>
-      <td class="hint">${esc(f.auto || "")}</td><td class="hint">${f.port ? "copier depuis " + esc(f.port.game) + " " + esc(f.port.file) : f.shared >= 2 ? "SDK (" + f.shared + " jeux)" : ""}</td></tr>`).join("")}</table>
+      <td class="hint">${esc(f.auto || "")}</td><td class="hint">${f.port ? portNote(f.port) + " " + esc(f.port.file) : f.shared >= 2 ? "SDK (" + f.shared + " jeux)" : ""}</td></tr>`).join("")}</table>
     <div id="asm"></div><h3 style="margin-top:14px">Brief (pour une personne ou une IA)</h3><pre>${esc(d.brief)}</pre>`);
 }
 async function showAsm(name) {
@@ -236,18 +255,19 @@ async function showAsm(name) {
 }
 
 async function subFunctions() {
-  const q = `functions?game=${encodeURIComponent(game())}&level=${fnLevel}&q=${encodeURIComponent(fnQuery)}&state=${fnState}&limit=400`;
+  const q = `functions?game=${encodeURIComponent(game())}&level=${fnLevel}&q=${encodeURIComponent(fnQuery)}&state=${fnState}&kind=${fnKind}&limit=400`;
   $("#sub").innerHTML = `<div class="card"><div class="btns" style="margin-bottom:10px">
     <select onchange="fnState=this.value;subFunctions()"><option value="todo" ${fnState === "todo" ? "selected" : ""}>A faire (triees par difficulte)</option><option value="done" ${fnState === "done" ? "selected" : ""}>Deja matchees</option></select>
     <select onchange="fnLevel=this.value;fLevel=this.value===''?null:+this.value;subFunctions()"><option value="">Tous niveaux</option>${O.levels.map(l => `<option value="${l.n}" ${fnLevel === String(l.n) ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
+    <select onchange="fnKind=this.value;subFunctions()">${[["", "Tous modules"], ["auto", "ARM module principal (outils auto)"], ["manual", "Tout ce que les outils ne font pas"], ["thumb", "Thumb"], ["overlay", "Overlays"], ["tcm", "ITCM / DTCM"]].map(([k, l]) => `<option value="${k}" ${fnKind === k ? "selected" : ""}>${l}</option>`).join("")}</select>
     <input placeholder="nom..." value="${esc(fnQuery)}" onchange="fnQuery=this.value;subFunctions()"><span class="hint" id="fncount"></span></div><div id="fntable" class="hint">Chargement...</div><div id="asm"></div></div>`;
   const d = await api(q);
   if (d.error) return;
   $("#fncount").textContent = `${fmt(d.total)} fonctions${d.total > d.rows.length ? " (400 premieres)" : ""}`;
   $("#fntable").innerHTML = `<table><tr><th>Fonction</th><th>Adresse</th><th class="num">Taille</th><th>Mode</th><th>Niveau</th><th>auto_match</th><th>Bloc</th><th>Note</th></tr>
     ${d.rows.map(f => `<tr class="click" onclick="showAsm('${esc(f.name)}')"><td><b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td><td class="num">${f.size}</td>
-    <td class="hint">${f.mode}</td><td>${f.done ? (esc(f.file || "")) : `<span class="c${f.level}">${esc(LV(f.level).label)}</span>`}</td><td class="hint">${esc(f.auto || "")}</td>
-    <td class="hint">${esc(f.block || "")}</td><td class="hint">${f.port ? "copier depuis " + esc(f.port.game) : f.shared >= 2 ? "SDK (" + f.shared + ")" : ""}</td></tr>`).join("")}</table>`;
+    <td class="hint">${f.mode}${f.module !== "main" ? " &middot; " + esc(f.module) : ""}</td><td>${f.done ? (esc(f.file || "")) : `<span class="c${f.level}">${esc(LV(f.level).label)}</span>`}</td><td class="hint">${esc(f.auto || "")}</td>
+    <td class="hint">${esc(f.block || "")}</td><td class="hint">${f.port ? portNote(f.port) : f.shared >= 2 ? "SDK (" + f.shared + ")" : ""}</td></tr>`).join("")}</table>`;
 }
 
 async function subMap() {
@@ -267,13 +287,19 @@ async function subMap() {
   cv.onmousemove = e => {
     const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, row = Math.floor(y / rh);
     const a = d.start + row * per + (x / W) * per, f = d.functions.find(f => f[0] <= a && a < f[0] + Math.max(f[1], per / W * 2));
-    $("#maptip").textContent = f ? `${hex(f[0])} - ${f[1]} octets - ${f[2] < 0 ? "matchee" : LV(f[2]).label}` : hex(a);
+    $("#maptip").textContent = f ? `${f[3] || ""} ${hex(f[0])} - ${f[1]} octets - ${f[2] < 0 ? "matchee" : LV(f[2]).label}` : hex(a);
     cv._f = f;
   };
-  cv.onclick = async () => { if (cv._f) { const fs = await api(`functions?game=${encodeURIComponent(game())}&state=todo&limit=100000`); const m = (fs.rows || []).find(r => r.addr === cv._f[0]); if (m) showAsm(m.name); } };
+  cv.onclick = () => { if (cv._f && cv._f[3]) showAsm(cv._f[3]); };
 }
 
 const JOB_OPTS = {
+  donors: [["max", "Nombre max de fonctions a reprendre (un lot ; 0 = toutes)", "number", 50],
+    ["block", "Seulement le bloc (ex. L0-01001, vide = tout le jeu)", "text", ""],
+    ["jobs", "Fonctions essayees en parallele (-j)", "number", 14],
+    ["bisect", "Builds ninja max pour isoler les fichiers qui cassent la ROM (0 = tout annuler)", "number", 40],
+    ["list", "Seulement lister les candidates (rapide, remplit le niveau Portable)", "check", false],
+    ["dry_run", "Essai a blanc (ne change rien)", "check", false]],
   auto: [["jobs", "Coeurs utilises (-j)", "number", 16], ["permute", "Permuter sur N near misses (0 = non)", "number", 0],
     ["minutes", "Minutes de permuter par fonction", "number", 2], ["fresh", "Tout refaire (ignorer le cache des echecs)", "check", false],
     ["dry_run", "Essai a blanc (ne change rien)", "check", false],
@@ -288,6 +314,7 @@ const JOB_OPTS = {
 };
 function optField([k, label, type, def]) {
   if (type === "check") return `<tr><td>${esc(label)}</td><td><input type="checkbox" data-k="${k}" ${def ? "checked" : ""}></td></tr>`;
+  if (type === "text") return `<tr><td>${esc(label)}</td><td><input data-k="${k}" value="${esc(def)}"></td></tr>`;
   if (type === "select") return `<tr><td>${esc(label)}</td><td><select data-k="${k}">${def.map(v => `<option value="${v}">${v || "non"}</option>`).join("")}</select></td></tr>`;
   return `<tr><td>${esc(label)}</td><td><input type="number" data-k="${k}" value="${def}" style="width:90px"></td></tr>`;
 }
@@ -299,7 +326,7 @@ function readFields() {
 async function runJob(id, params) {
   if (JOB_OPTS[id] && !params) {
     const opts = JOB_OPTS[id].map(o => o[0] === "push" ? [o[0], o[1], o[2], !!G.game.remote] : o);
-    modal(`<h2>${esc(O.jobdefs[id].label)}</h2><p class="hint">${esc(O.jobdefs[id].desc)}</p><table>${opts.map(optField).join("")}</table>
+    modal(`<h2>${esc(JD(id).label)}</h2><p class="hint">${esc(JD(id).desc)}</p><table>${opts.map(optField).join("")}</table>
       <div class="btns" style="margin-top:12px"><button class="btn" onclick="closeModal();runJob('${id}',readFields())">Lancer</button>
       <button class="btn sec" onclick="closeModal()">Annuler</button></div>`);
     return;
@@ -315,35 +342,81 @@ async function publishGame() {
 }
 
 // ---------------- Queue ----------------
+// The page is built once; the periodic refresh only replaces the block whose content changed (claims, jobs, log),
+// so scroll positions, an open "all tasks" list and the log stay where they are.
+let lastOverview = 0, jobsAll = false;
+const JOBS_SHOWN = 10;
 async function viewQueue() {
-  await loadOverview();
+  if (Date.now() - lastOverview > 30000) { await loadOverview(); lastOverview = Date.now(); }
   const d = await api("jobs"); J = d.jobs || [];
-  let h = `<div class="split"><div class="card"><h3>Qui travaille sur quoi (tous les jeux)</h3>
-    <p class="hint">Les blocs pris par des personnes ou des IA. Un bloc non touche depuis 48 h retourne dans la queue.</p>`;
-  h += O.queue.length ? `<table><tr><th>Jeu</th><th>Bloc</th><th>Qui</th><th>Depuis</th><th></th></tr>${O.queue.map(c => `<tr><td>${esc(c.title)}</td><td><b>${esc(c.block)}</b></td>
-    <td>${esc(c.who)}<div class="hint">${esc(O.kinds[c.kind] || c.kind)}${c.note ? " &middot; " + esc(c.note) : ""}</div></td><td class="hint">${ago(c.touched)} ${c.expired ? '<span class="state expired">expire</span>' : ""}</td>
-    <td><button class="btn small sec" onclick="selectGame('${c.game}')">Ouvrir</button></td></tr>`).join("")}</table>` : '<div class="empty">Personne ne travaille sur un bloc pour l\'instant.</div>';
-  h += `</div><div class="card"><h3>Comment rejoindre (personnes et IA)</h3>
+  return `<div class="split"><div class="card"><h3>Qui travaille sur quoi (tous les jeux)</h3>
+    <p class="hint">Les blocs pris par des personnes ou des IA. Un bloc non touche depuis 48 h retourne dans la queue.</p>
+    <div id="claimsbox">${claimsHtml()}</div></div>
+    <div class="card"><h3>Comment rejoindre (personnes et IA)</h3>
     <p>Une personne ou une IA prend un bloc, travaille, puis le marque termine. Les prises sont enregistrees dans le repo GitHub du jeu (<code>.studio/claims/</code>), donc tout le monde voit la meme queue.</p>
     <pre>python studio/studio.py blocks &lt;jeu&gt; --free
 python studio/studio.py claim &lt;jeu&gt; next --who NOM --kind claude
 python studio/studio.py brief &lt;jeu&gt; &lt;bloc&gt;     (fiche de travail)
 python studio/studio.py done &lt;jeu&gt; &lt;bloc&gt;</pre>
-    <p class="hint">Les taches machine (a droite / en bas) passent une par une par jeu, et au maximum ${O.settings.max_parallel_jobs} en meme temps (Reglages).</p></div></div>`;
-  h += `<div class="card"><h3>Taches machine</h3>${J.length ? `<table><tr><th>#</th><th>Tache</th><th>Jeu</th><th>Etat</th><th>Avancement</th><th>Duree</th><th></th></tr>
-    ${J.map(j => `<tr><td class="hint">${j.n}</td><td>${esc(j.label)}${j.params && j.params.block ? " " + esc(j.params.block) : ""}</td><td class="hint">${esc(j.game || "-")}</td>
+    <p class="hint">Les taches machine (en bas) passent une par une par jeu, et au maximum ${O.settings.max_parallel_jobs} en meme temps (Reglages).</p></div></div>
+    <div class="card"><div class="btns" style="justify-content:space-between"><h3 style="margin:0">Taches machine</h3><span id="jobsbtn">${jobsButton()}</span></div>
+    <div id="jobsbox">${jobsHtml()}</div><div id="logbox"></div></div>`;
+}
+function claimsHtml() {
+  return O.queue.length ? `<table><tr><th>Jeu</th><th>Bloc</th><th>Qui</th><th>Depuis</th><th></th></tr>${O.queue.map(c => `<tr><td>${esc(c.title)}</td><td><b>${esc(c.block)}</b></td>
+    <td>${esc(c.who)}<div class="hint">${esc(O.kinds[c.kind] || c.kind)}${c.note ? " &middot; " + esc(c.note) : ""}</div></td><td class="hint">${ago(c.touched)} ${c.expired ? '<span class="state expired">expire</span>' : ""}</td>
+    <td><button class="btn small sec" onclick="selectGame('${c.game}')">Ouvrir</button></td></tr>`).join("")}</table>` : '<div class="empty">Personne ne travaille sur un bloc pour l\'instant.</div>';
+}
+function jobsButton() {
+  return J.length > JOBS_SHOWN ? `<button class="btn small sec" onclick="toggleJobs()">${jobsAll ? "Reduire aux 10 dernieres" : `Voir toute la liste (${J.length})`}</button>` : "";
+}
+function jobRow(j) {
+  return `<tr><td class="hint">${j.n}</td><td>${esc(j.label)}${j.params && j.params.block ? " " + esc(j.params.block) : ""}</td><td class="hint">${esc(j.game || "-")}</td>
     <td><span class="state ${j.state}">${ST[j.state] || j.state}</span></td><td style="min-width:140px"><div class="bar"><i style="width:${j.pct}%"></i></div></td>
     <td class="hint">${Math.floor(j.elapsed / 60)} min ${j.elapsed % 60} s</td>
-    <td class="btns"><button class="btn small sec" onclick="showLog(${j.n})">Log</button>
+    <td class="btns"><button class="btn small sec ${openLog === j.n ? "on" : ""}" onclick="showLog(${j.n})">Log</button>
     ${j.state === "running" || j.state === "queued" ? `<button class="btn small red" onclick="cancelJob(${j.n})">Stop</button>` : ""}
-    ${j.id === "qwen" && j.state === "running" ? `<button class="btn small sec" onclick="api('qwen_stop',{game:'${j.game}'}).then(()=>toast('Qwen s\\'arretera apres la fonction en cours'))">Finir apres la fonction</button>` : ""}</td></tr>`).join("")}</table>` : '<div class="empty">Aucune tache.</div>'}
-    <div id="logbox"></div></div>`;
-  return h;
+    ${j.id === "qwen" && j.state === "running" ? `<button class="btn small sec" onclick="api('qwen_stop',{game:'${j.game}'}).then(()=>toast('Qwen s\\'arretera apres la fonction en cours'))">Finir apres la fonction</button>` : ""}</td></tr>`;
 }
-async function cancelJob(n) { await api("cancel", {n}); toast("Tache arretee"); render(); }
-async function showLog(n) {
-  openLog = n; const d = await api("log?n=" + n);
-  const box = $("#logbox"); if (box) { box.innerHTML = `<h3 style="margin-top:12px">Log de la tache #${n}</h3><pre id="logpre">${esc(d.log)}</pre>`; const p = $("#logpre"); p.scrollTop = p.scrollHeight; }
+function jobsHtml() {
+  if (!J.length) return '<div class="empty">Aucune tache.</div>';
+  const rows = jobsAll ? J : J.slice(0, JOBS_SHOWN);
+  return `<div class="${jobsAll ? "scrollbox" : ""}" id="jobsscroll"><table><tr><th>#</th><th>Tache</th><th>Jeu</th><th>Etat</th><th>Avancement</th><th>Duree</th><th></th></tr>
+    ${rows.map(jobRow).join("")}</table></div>${!jobsAll && J.length > JOBS_SHOWN ? `<div class="hint" style="margin-top:6px">${J.length - JOBS_SHOWN} taches plus anciennes masquees</div>` : ""}`;
+}
+function setHtml(id, html) {
+  // Replaces a block only when its content changed, keeping the scroll position of its scrollable part
+  const el = $("#" + id); if (!el || el._html === html) return;
+  const sc = el.querySelector(".scrollbox"), top = sc ? sc.scrollTop : 0;
+  el.innerHTML = html; el._html = html;
+  const sc2 = el.querySelector(".scrollbox"); if (sc2) sc2.scrollTop = top;
+}
+function toggleJobs() { jobsAll = !jobsAll; setHtml("jobsbtn", jobsButton()); setHtml("jobsbox", jobsHtml()); }
+async function refreshQueue() {
+  if (Date.now() - lastOverview > 30000) { await loadOverview(); lastOverview = Date.now(); setHtml("claimsbox", claimsHtml()); }
+  const d = await api("jobs"); if (d.error) return;
+  J = d.jobs || [];
+  setHtml("jobsbtn", jobsButton());
+  setHtml("jobsbox", jobsHtml());
+  if (openLog) showLog(openLog, true);
+}
+async function cancelJob(n) { await api("cancel", {n}); toast("Tache arretee"); refreshQueue(); }
+async function showLog(n, refresh) {
+  if (!refresh) { openLog = n; setHtml("jobsbox", jobsHtml()); }
+  const d = await api("log?n=" + n);
+  const box = $("#logbox"); if (!box) return;
+  let pre = $("#logpre");
+  if (!pre || box.dataset.n !== String(n)) {
+    box.dataset.n = n;
+    box.innerHTML = `<div class="btns" style="justify-content:space-between;margin-top:12px"><h3 style="margin:0">Log de la tache #${n}</h3>
+      <button class="btn small sec" onclick="openLog=null;$('#logbox').innerHTML='';$('#logbox').dataset.n='';setHtml('jobsbox', jobsHtml())">Fermer</button></div><pre id="logpre"></pre>`;
+    pre = $("#logpre");
+  }
+  const text = d.log || "(pas encore de sortie : la tache demarre ou cherche encore, ca s'affiche des que possible)";
+  if (pre.textContent === text) return;
+  const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 30;  // follow the end only if already there
+  pre.textContent = text;
+  if (atBottom || !refresh) pre.scrollTop = pre.scrollHeight;
 }
 
 // ---------------- Engine map ----------------
@@ -355,7 +428,7 @@ async function viewEngine() {
   h += `<div class="split"><div class="card"><h3>Jeux indexes (base d'empreintes)</h3><p class="hint">SDK = code Nintendo present dans 5 jeux ou plus. Unique = code propre au jeu.</p>
     <table><tr><th>Jeu</th><th class="num">Fonctions</th><th class="num">SDK</th><th class="num">Unique</th></tr>
     ${d.games.map(g => `<tr><td>${esc(g.title)}<div class="hint">${esc(g.studio)}</div></td><td class="num">${fmt(g.functions)}</td><td class="num">${fmt(g.sdk)}</td><td class="num">${fmt(g.unique)}</td></tr>`).join("")}</table>
-    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button></div></div>
+    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button><button class="btn small sec" title="compile les depots de decomps-externes/ (NitroSDK, pret...)" onclick="api('run',{id:'donors_index'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les decomps externes</button></div></div>
     <div class="card"><h3>Moteurs partages entre jeux</h3><p class="hint">Fonctions identiques entre deux jeux, hors SDK : du code moteur reutilise. Un match dans un jeu = gratuit dans l'autre (niveau "Portable").</p>
     <table><tr><th>Jeu A</th><th>Jeu B</th><th class="num">Moteur commun</th><th class="num">SDK commun</th></tr>
     ${d.pairs.slice(0, 40).map(p => `<tr><td>${esc(p.a)}</td><td>${esc(p.b)}</td><td class="num"><b>${fmt(p.engine)}</b></td><td class="num hint">${fmt(p.sdk)}</td></tr>`).join("")}</table></div></div>`;
@@ -396,7 +469,7 @@ async function saveSettings() {
   tabs(); await loadOverview(); render(); loadXP();
   setInterval(async () => {
     if (document.hidden || $("#modal").classList.contains("on")) return;
-    if (tab === "queue") { const y = scrollY; await render(); if (openLog) showLog(openLog); scrollTo(0, y); }
+    if (tab === "queue") await refreshQueue();
   }, 4000);
   setInterval(() => { if (!document.hidden) loadXP(); }, 60000);
 })();

@@ -8,7 +8,7 @@ Levels 1-5: size of the function, corrected by the last auto_match result:
 """
 
 LEVELS = [
-    {"n": 0, "key": "portable", "label": "Portable", "hint": "deja matchee dans un autre jeu : copier la source"},
+    {"n": 0, "key": "portable", "label": "Portable", "hint": "deja matchee dans un autre jeu ou une decomp externe : copier / reprendre la source"},
     {"n": 1, "key": "facile", "label": "Facile", "hint": "petite fonction ou brouillon presque bon"},
     {"n": 2, "key": "moyen", "label": "Moyen", "hint": "quelques branches, brouillon m2c a corriger"},
     {"n": 3, "key": "difficile", "label": "Difficile", "hint": "boucles, structures a deviner"},
@@ -28,7 +28,7 @@ def size_level(size: int) -> int:
 
 def rate(fn: dict, portable: dict) -> dict:
     """Adds level / score to an unmatched function row (see games.Game.functions)."""
-    if fn["addr"] in portable:
+    if fn.get("module", "main") == "main" and fn["addr"] in portable:
         g, other, src = portable[fn["addr"]]
         fn.update(level=0, score=fn["size"] / 1000, port={"game": g, "name": other, "file": src})
         return fn
@@ -38,6 +38,8 @@ def rate(fn: dict, portable: dict) -> dict:
         lvl -= 1
     elif auto in ("compile", "m2c"):
         lvl += 1
+    if not fn.get("auto_tools", True):
+        lvl += 1  # Thumb or outside the main module: no automatic tool helps (no m2c draft, no auto_match)
     lvl = max(1, min(5, lvl))
     # score: continuous value for sorting inside a level (bytes, weighted by the auto_match result)
     w = {"near": 0.6, "size": 1.0, "": 1.1, "compile": 1.3, "m2c": 1.5}.get(auto, 1.0)

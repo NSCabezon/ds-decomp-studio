@@ -31,6 +31,11 @@ DEFS = {
     "sync_tools": ("Mettre a jour les outils", "game", 60, "copie la derniere version des outils de rayman-rr (auto_match...)"),
     "sync_all": ("Mettre a jour les outils de tous les jeux", "global", 300, "idem pour chaque jeu"),
     "scan": ("Indexer les empreintes (fingerprint)", "global", 180, "met a jour fpdb.sqlite"),
+    "donors": ("Reprendre les matchs des autres decomps", "game", 1200,
+               "fonctions deja decompilees ailleurs (NitroSDK, pret...) : compile + compare, fichiers fautifs "
+               "retires (build ninja + bisection), puis un verify complet"),
+    "donors_index": ("Indexer les decomps externes", "global", 1800,
+                     "compile les depots de decomps-externes/ et met a jour donors.sqlite"),
     "new_project": ("Ajouter un jeu", "global", 600, "dsd init + build depuis une ROM de roms/"),
     "publish": ("Publier sur GitHub", "game", 180, "cree le repo public et pousse"),
 }
@@ -95,6 +100,28 @@ def command(jid: str, game, p: dict) -> str:
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools {_q(game.id)}"
     if jid == "sync_all":
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools"
+    if jid == "donors":
+        # by block (the functions of one block), by batch (--max N matches), or only the list of candidates
+        cmd = "python tools/donor_match.py"
+        if p.get("list"):
+            return cmd + " --list"
+        if p.get("block"):
+            from . import blocks as _blocks
+            b = next((b for b in _blocks.load(game)["blocks"] if b["id"] == p["block"]), None)
+            if b is None:
+                raise KeyError(f"bloc inconnu : {p['block']}")
+            cmd += " --names " + _q(",".join(b["functions"]))
+        if int(p.get("max") or 0):
+            cmd += f" --max {int(p['max'])}"
+        if int(p.get("jobs") or 0):
+            cmd += f" -j {int(p['jobs'])}"
+        if p.get("bisect") not in (None, ""):
+            cmd += f" --bisect {int(p['bisect'])}"
+        if p.get("dry_run"):
+            cmd += " --dry-run"
+        return cmd + " && python tools/donor_match.py --list"
+    if jid == "donors_index":
+        return "python tools/donors.py index"
     if jid == "scan":
         return "python tools/fingerprint.py scan projets/_analyse/*"
     if jid == "new_project":
@@ -164,6 +191,7 @@ def _start(j):
     j["state"], j["started"] = "running", time.time()
     logf = (LOGS / f"{j['n']}.log").open("w", encoding="utf-8")
     logf.write(f"$ {j['cmd']}\n(dans {cwd})\n\n")
+    logf.flush()  # visible in the Queue tab right away, even before the task prints anything
     try:
         p = subprocess.Popen([str(config.BASH), "-c", full], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env=env, creationflags=0x08000000)

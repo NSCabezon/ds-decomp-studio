@@ -61,7 +61,9 @@ def rebuild(g, size=config.BLOCK_SIZE, commit=True) -> dict:
         gen = old.get("generation", 0) + 1
         blocks = list(kept)
         for lvl in range(6):
-            fns = sorted((r for r in rated if r["level"] == lvl and r["name"] not in taken), key=lambda r: r["addr"])
+            # main module first, then ITCM/DTCM/overlays: a block stays inside one module as much as possible
+            fns = sorted((r for r in rated if r["level"] == lvl and r["name"] not in taken),
+                         key=lambda r: (r.get("module", "main") != "main", r.get("module", "main"), r["addr"]))
             for k in range(0, len(fns), size):
                 chunk = fns[k:k + size]
                 blocks.append({"id": f"L{lvl}-{gen:02}{k // size + 1:03}", "level": lvl,

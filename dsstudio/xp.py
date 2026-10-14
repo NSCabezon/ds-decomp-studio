@@ -64,7 +64,7 @@ def update(blocks_done=0) -> dict:
             if not g.ready:
                 continue
             rows = g.functions()
-            now = {r["addr"] for r in rows if r["done"]}
+            now = {r["uid"] for r in rows if r["done"]}
             gs = save["games"].setdefault(g.id, {"known": None})
             if gs["known"] is None:
                 x = sum(fn_xp(r["size"], r["shared"]) for r in rows if r["done"])
@@ -74,12 +74,12 @@ def update(blocks_done=0) -> dict:
             else:
                 known = set(gs["known"])
                 for r in rows:
-                    if r["done"] and r["addr"] not in known:
+                    if r["done"] and r["uid"] not in known:
                         x = fn_xp(r["size"], r["shared"])
                         gain += x
                         events.append({"t": time.time(), "kind": "loot", "game": g.id, "name": r["name"],
                                        "size": r["size"], "rarity": rarity(r["size"]), "xp": x})
-            gs["known"] = sorted(now)
+            gs["known"] = sorted(now, key=str)
             s = g.summary()
             stats["matched"] += s["matched"]
             stats["best_pct"] = max(stats["best_pct"], s["pct_code"])

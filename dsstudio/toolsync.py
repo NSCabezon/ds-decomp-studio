@@ -28,12 +28,32 @@ def _norm(b: bytes) -> bytes:
     return b.replace(b"\r\n", b"\n")
 
 
+_status_cache: dict = {}
+
+
+def _stamp(p) -> tuple:
+    try:
+        st = p.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return 0, 0
+
+
 def status(g) -> dict:
-    """{'behind': [tools whose content differs from gametools/]}"""
+    """{'behind': [tools whose content differs from gametools/]}. Files are only read again when their date or
+    size changed (the overview asks for every game on each refresh)."""
     if not g.ready:
         return {"behind": []}
+    names = tool_names()
+    key = (g.id,) + tuple(_stamp(g.path / "tools" / n) + _stamp(SOURCE / n) for n in names)
+    if key not in _status_cache:
+        _status_cache[key] = _status(g, names)
+    return _status_cache[key]
+
+
+def _status(g, names) -> dict:
     behind = []
-    for name in tool_names():
+    for name in names:
         cur = g.path / "tools" / name
         if not cur.exists() or _norm(cur.read_bytes()) != _norm((SOURCE / name).read_bytes()):
             behind.append(name)
