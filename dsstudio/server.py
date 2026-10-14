@@ -1,0 +1,173 @@
+"""HTTP server of the studio (standard library only). Serves web/ and a JSON API on 127.0.0.1."""
+import json
+import mimetypes
+import threading
+import traceback
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from . import blocks, brief, config, difficulty, engine, games, jobs, projects, xp
+
+
+def overview():
+    gl = [g.info() for g in games.all_games()]
+    return {"games": gl, "settings": config.settings(), "levels": difficulty.LEVELS, "kinds": blocks.KINDS,
+            "queue": blocks.queue_overview(), "archived": projects.archived(),
+            "jobdefs": {k: {"label": v[0], "scope": v[1], "desc": v[3]} for k, v in jobs.DEFS.items()}}
+
+
+def game_view(gid):
+    g = games.get(gid)
+    bl = blocks.view(g) if g.ready else []
+    per_level = {}
+    for b in bl:
+        e = per_level.setdefault(b["level"], {"blocks": 0, "free": 0, "claimed": 0, "done": 0, "left": 0})
+        e["blocks"] += 1
+        e["left"] += b["left"]
+        e["free" if b["state"] in ("free", "expired") else b["state"]] += 1
+    return {"game": g.info(), "blocks": bl, "per_level": per_level, "generation": blocks.load(g).get("generation", 0)}
+
+
+def function_list(gid, level, q, state, limit):
+    g = games.get(gid)
+    rows = g.functions()
+    if state == "done":
+        out = [dict(r) for r in rows if r["done"]]
+    else:
+        out = difficulty.rate_all(rows, games.portable(g))
+        if level not in (None, ""):
+            out = [r for r in out if r["level"] == int(level)]
+    if q:
+        out = [r for r in out if q.lower() in r["name"].lower()]
+    out.sort(key=lambda r: (r.get("level", 0), r.get("score", 0)) if state != "done" else r["addr"])
+    # block of each function
+    owner = {f: b["id"] for b in blocks.load(g)["blocks"] for f in b["functions"]}
+    for r in out:
+        r["block"] = owner.get(r["name"], "")
+    return {"total": len(out), "rows": out[:limit]}
+
+
+def asm_of(gid, name):
+    import re
+    g = games.get(gid)
+    for f in (g.path / "build").glob("*/asm/**/*.s"):
+        t = f.read_text(encoding="utf-8", errors="replace")
+        if name not in t:
+            continue
+        m = re.search(rf"^{re.escape(name)}: .*?^\s+(?:arm|thumb)_func_end {re.escape(name)}$", t, re.S | re.M)
+        if m:
+            return m.group(0)
+    return "(assembleur introuvable : lancez la tache 'Desassembler' sur ce jeu)"
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def send(self, obj, code=200, ctype="application/json"):
+        body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text", "application/j")) else ""))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        try:
+            if not u.path.startswith("/api/"):
+                name = u.path.strip("/") or "index.html"
+                f = (config.WEB / name).resolve()
+                if config.WEB.resolve() in f.parents and f.is_file():
+                    return self.send(f.read_bytes(), ctype=mimetypes.guess_type(f.name)[0] or "text/plain")
+                return self.send({"error": "not found"}, 404)
+            p = u.path[5:]
+            if p == "overview":
+                return self.send(overview())
+            if p == "game":
+                return self.send(game_view(q["id"]))
+            if p == "functions":
+                return self.send(function_list(q["game"], q.get("level"), q.get("q", ""), q.get("state", "todo"),
+                                               int(q.get("limit", 300))))
+            if p == "block":
+                g = games.get(q["game"])
+                return self.send({"functions": blocks.functions_of(g, q["id"]), "brief": brief.brief(g, q["id"])})
+            if p == "asm":
+                return self.send({"asm": asm_of(q["game"], q["name"])})
+            if p == "map":
+                return self.send(engine.memory_map(games.get(q["game"])))
+            if p == "engine":
+                return self.send({**engine.cross_games(), "studios": engine.studios()})
+            if p == "jobs":
+                return self.send({"jobs": jobs.view()})
+            if p == "log":
+                return self.send({"log": jobs.full_log(int(q["n"]))})
+            if p == "xp":
+                done = sum(len(blocks.finished(g)) for g in games.all_games() if g.ready)
+                return self.send(xp.update(done))
+            if p == "roms":
+                return self.send({"roms": projects.roms_without_project()})
+            if p == "github":
+                return self.send({"repos": projects.published_on_github()})
+        except KeyError as e:
+            return self.send({"error": str(e)}, 400)
+        except Exception as e:
+            traceback.print_exc()
+            return self.send({"error": repr(e)}, 500)
+        self.send({"error": "not found"}, 404)
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        try:
+            d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)) or b"{}")
+            p = u.path[5:]
+            s = config.settings()
+            if p == "claim":
+                return self.send(blocks.claim(games.get(d["game"]), d.get("block"), d.get("who") or s["who"],
+                                              d.get("kind", "human"), d.get("level"), d.get("note", "")))
+            if p == "release":
+                return self.send(blocks.release(games.get(d["game"]), d["block"], None, bool(d.get("finished"))))
+            if p == "touch":
+                return self.send(blocks.touch(games.get(d["game"]), d["block"], note=d.get("note")))
+            if p == "rebuild":
+                data = blocks.rebuild(games.get(d["game"]))
+                return self.send({"ok": True, "blocks": len(data["blocks"])})
+            if p == "run":
+                return self.send(jobs.submit(d["id"], d.get("game"), d.get("params") or {}, s["who"]))
+            if p == "cancel":
+                return self.send({"ok": jobs.cancel(int(d["n"]))})
+            if p == "qwen_stop":
+                g = games.get(d["game"])
+                (g.path / "build" / "qwen_auto").mkdir(parents=True, exist_ok=True)
+                (g.path / "build" / "qwen_auto" / "STOP").write_text("stop")
+                return self.send({"ok": True})
+            if p == "settings":
+                return self.send(config.save_settings(d))
+            if p == "archive":
+                return self.send(projects.archive(d["game"]))
+            if p == "restore":
+                return self.send(projects.restore(d["name"]))
+            if p == "clone":
+                return self.send(projects.clone(d["url"]))
+        except KeyError as e:
+            return self.send({"error": str(e)}, 400)
+        except Exception as e:
+            traceback.print_exc()
+            return self.send({"error": repr(e)}, 500)
+        self.send({"error": "bad request"}, 400)
+
+
+def serve(open_browser=True):
+    jobs.start_scheduler()
+    srv = ThreadingHTTPServer(("127.0.0.1", config.PORT), H)
+    url = f"http://127.0.0.1:{config.PORT}"
+    print(f"DS Decomp Studio sur {url}  (Ctrl+C pour arreter)")
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass

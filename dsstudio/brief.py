@@ -1,0 +1,56 @@
+"""Work sheet of a block: everything a person or an AI (Claude, Qwen Code, ...) needs to work on it alone."""
+from . import blocks, config, difficulty
+
+
+def brief(g, block_id: str) -> str:
+    fns = blocks.functions_of(g, block_id)
+    todo = [f for f in fns if not f["done"]]
+    v = g.version
+    lv = difficulty.LEVELS[next((b["level"] for b in blocks.load(g)["blocks"] if b["id"] == block_id), 1)]
+    lines = [
+        f"# {g.title} - block {block_id} ({lv['label']})",
+        "",
+        f"Project: `{g.path.as_posix()}` (version `{v}`). {len(todo)} of {len(fns)} functions left.",
+        "",
+        "## Goal",
+        "Matching decompilation: write C that compiles (Metrowerks mwccarm) to exactly the same bytes as the game.",
+        "",
+        "## Rules",
+        f"- Before starting: `python \"{(config.STUDIO / 'studio.py').as_posix()}\" claim {g.id} {block_id} --who <your name> --kind claude`.",
+        "- Activate the environment first: `source \"" + config.ENV_SH.as_posix() + "\"` (Git Bash).",
+        "- Never commit unless `python tools/match.py verify` prints `VERIFY PASSED`.",
+        "- Only commit `src/`, `include/` and `config/` files you changed (never `git add -A`). ASCII only.",
+        "- Never use leaked source code. Clean-room: from the binary and public projects only.",
+        "- A function you cannot match: leave it, note why in the claim (`studio.py touch ... --note`).",
+        f"- When finished: `python \"{(config.STUDIO / 'studio.py').as_posix()}\" done {g.id} {block_id}`.",
+        "",
+        "## How to match one function",
+        f"1. Assembly: `build/{v}/asm/` (run `ninja dis` if missing). Draft: `build/auto/near/<name>.c`, "
+        "`build/drafts/<name>.c`, or `python tools/draft.py <name>`.",
+        "2. Put the C in `src/auto/<name>.c` (or a real source file) and check one function:",
+        "   `python tools/probe_compiler.py src/auto/<name>.c <name> <address> --only 2.0/sp1p5 --flags=-O4,p --show`",
+        "   (`1.2/sp2p3` for library code: epilogue `ldmfd sp!, {..., lr}` + `bx lr`).",
+        f"3. Declare it in `config/{v}/arm9/delinks.txt` (`complete`, `.text start/end`), "
+        f"`python tools/configure.py {v}`, `ninja`, `python tools/match.py verify`.",
+        "4. Commit with the list of matched functions.",
+        "",
+        "## Functions",
+        "",
+        "| Function | Address | Size | Mode | Level | auto_match | Note |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for f in fns:
+        if f["done"]:
+            continue
+        note = ""
+        if f.get("port"):
+            p = f["port"]
+            note = f"same code matched in {p['game']}: `{p['file']}` ({p['name']})"
+        elif f.get("shared", 0) >= 2:
+            note = f"SDK, in {f['shared']} other games"
+        lines.append(f"| {f['name']} | 0x{f['addr']:08x} | {f['size']} | {f['mode']} | "
+                     f"{difficulty.LEVELS[f.get('level', 1)]['label']} | {difficulty.AUTO_LABEL.get(f['auto'], f['auto'])} | {note} |")
+    done = [f["name"] for f in fns if f["done"]]
+    if done:
+        lines += ["", f"Already matched in this block: {', '.join(done)}"]
+    return "\n".join(lines) + "\n"
