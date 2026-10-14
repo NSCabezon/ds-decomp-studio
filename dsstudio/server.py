@@ -7,11 +7,11 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import blocks, brief, config, difficulty, engine, games, jobs, projects, xp
+from . import blocks, brief, config, difficulty, engine, games, jobs, projects, toolsync, xp
 
 
 def overview():
-    gl = [g.info() for g in games.all_games()]
+    gl = [{**g.info(), "tools_behind": toolsync.status(g)["behind"]} for g in games.all_games()]
     return {"games": gl, "settings": config.settings(), "levels": difficulty.LEVELS, "kinds": blocks.KINDS,
             "queue": blocks.queue_overview(), "archived": projects.archived(),
             "jobdefs": {k: {"label": v[0], "scope": v[1], "desc": v[3]} for k, v in jobs.DEFS.items()}}
@@ -26,7 +26,7 @@ def game_view(gid):
         e["blocks"] += 1
         e["left"] += b["left"]
         e["free" if b["state"] in ("free", "expired") else b["state"]] += 1
-    return {"game": g.info(), "blocks": bl, "per_level": per_level, "generation": blocks.load(g).get("generation", 0)}
+    return {"game": {**g.info(), "tools_behind": toolsync.status(g)["behind"]}, "blocks": bl, "per_level": per_level, "generation": blocks.load(g).get("generation", 0)}
 
 
 def function_list(gid, level, q, state, limit):
@@ -128,6 +128,26 @@ class H(BaseHTTPRequestHandler):
             if p == "claim":
                 return self.send(blocks.claim(games.get(d["game"]), d.get("block"), d.get("who") or s["who"],
                                               d.get("kind", "human"), d.get("level"), d.get("note", "")))
+            if p == "qwen_swarm":
+                # Qwen agents on several blocks at once: claims them for Qwen, then one job (N agents) for all
+                g = games.get(d["game"])
+                ids = d.get("blocks") or []
+                if not ids:
+                    lvl = d.get("level")
+                    ids = [b["id"] for b in blocks.view(g) if b["state"] in ("free", "expired")
+                           and (lvl is None or b["level"] == int(lvl))][:int(d.get("count") or 1)]
+                if not ids:
+                    return self.send({"error": "aucun bloc libre a donner a Qwen"})
+                taken = []
+                for bid in ids:
+                    r = blocks.claim(g, bid, f"qwen-{s['who']}", "qwen")
+                    if r.get("ok"):
+                        taken.append(bid)
+                if not taken:
+                    return self.send({"error": "aucun bloc n'a pu etre pris"})
+                params = {k: d[k] for k in ("agents", "minutes", "max", "model", "batch") if d.get(k) not in (None, "")}
+                params["blocks"] = taken
+                return self.send({**jobs.submit("qwen", g.id, params, s["who"]), "blocks": taken})
             if p == "release":
                 return self.send(blocks.release(games.get(d["game"]), d["block"], None, bool(d.get("finished"))))
             if p == "touch":
@@ -160,10 +180,22 @@ class H(BaseHTTPRequestHandler):
         self.send({"error": "bad request"}, 400)
 
 
+class Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind the same port and steal half of the requests
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def serve(open_browser=True):
-    jobs.start_scheduler()
-    srv = ThreadingHTTPServer(("127.0.0.1", config.PORT), H)
     url = f"http://127.0.0.1:{config.PORT}"
+    try:
+        srv = Server(("127.0.0.1", config.PORT), H)
+    except OSError:
+        print(f"Le port {config.PORT} est deja pris : le studio (ou l'ancien dashboard) tourne deja. Ouverture de {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    jobs.start_scheduler()
     print(f"DS Decomp Studio sur {url}  (Ctrl+C pour arreter)")
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()

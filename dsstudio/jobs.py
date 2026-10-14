@@ -26,7 +26,9 @@ DEFS = {
     "auto": ("Auto-match", "game", 900, "m2c + compile + compare sur toutes les fonctions"),
     "permute": ("Auto-match + permuter", "game", 2400, "permuter sur les N near misses"),
     "moulinette": ("Moulinette complete", "game", 1800, "build, brouillons, auto-match, verify, commit (+push)"),
-    "qwen": ("Qwen sur un bloc", "game", 3600, "IA locale (Ollama) sur les fonctions d'un bloc"),
+    "qwen": ("Qwen (agents)", "game", 3600, "agents IA locaux (Ollama) sur les fonctions d'un ou plusieurs blocs"),
+    "sync_tools": ("Mettre a jour les outils", "game", 60, "copie la derniere version des outils de rayman-rr (auto_match...)"),
+    "sync_all": ("Mettre a jour les outils de tous les jeux", "global", 300, "idem pour chaque jeu"),
     "scan": ("Indexer les empreintes (fingerprint)", "global", 180, "met a jour fpdb.sqlite"),
     "new_project": ("Ajouter un jeu", "global", 600, "dsd init + build depuis une ROM de roms/"),
     "publish": ("Publier sur GitHub", "game", 180, "cree le repo public et pousse"),
@@ -52,18 +54,42 @@ def command(jid: str, game, p: dict) -> str:
         return "python tools/match.py verify"
     if jid == "dis":
         return f"rm -rf build/{v}/asm; ninja dis"
-    if jid == "auto":
-        return "python tools/auto_match.py"
-    if jid == "permute":
-        return f"python tools/auto_match.py --permute {int(p.get('n', 10))} --minutes {float(p.get('minutes', 2))}"
+    if jid in ("auto", "permute"):
+        env = "AUTO_FRESH=1 " if p.get("fresh") else ""
+        cmd = f"{env}python tools/auto_match.py"
+        if p.get("jobs"):
+            cmd += f" -j {int(p['jobs'])}"
+        if jid == "permute" or p.get("permute"):
+            cmd += f" --permute {int(p.get('permute') or p.get('n') or 10)} --minutes {float(p.get('minutes') or 2)}"
+        if p.get("dry_run"):
+            cmd += " --dry-run"
+        return cmd
     if jid == "moulinette":
-        extra = " --no-push" if not p.get("push") else ""
-        return f"python {_q(MOULINETTE.as_posix())} --game {_q(game.id)}{extra}"
+        cmd = f"python {_q(MOULINETTE.as_posix())} --game {_q(game.id)}"
+        if not p.get("push"):
+            cmd += " --no-push"
+        if p.get("permute_near"):
+            cmd += f" --permute-near {int(p['permute_near'])} --near-minutes {float(p.get('near_minutes') or 5)}"
+        if p.get("restart"):
+            cmd += f" --restart {_q(p['restart'])}"
+        for flag in ("no_drafts", "no_auto", "no_commit"):
+            if p.get(flag):
+                cmd += " --" + flag.replace("_", "-")
+        return cmd
     if jid == "qwen":
         s = config.settings()
+        blocks = p.get("blocks") or p.get("block")
+        if isinstance(blocks, list):
+            blocks = ",".join(blocks)
         return (f"python {_q((config.WORKERS / 'qwen_block.py').as_posix())} --project {_q(game.path.as_posix())}"
-                f" --block {_q(p['block'])} --model {_q(p.get('model') or s['qwen_model'])}"
-                f" --minutes {float(p.get('minutes') or s['qwen_minutes'])}")
+                f" --blocks {_q(blocks)} --model {_q(p.get('model') or s['qwen_model'])}"
+                f" --minutes {float(p.get('minutes') or s['qwen_minutes'])}"
+                f" --agents {int(p.get('agents') or s['qwen_agents'])} --max {int(p.get('max') or 0)}"
+                f" --batch {int(p.get('batch') or 10)}")
+    if jid == "sync_tools":
+        return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools {_q(game.id)}"
+    if jid == "sync_all":
+        return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools"
     if jid == "scan":
         return "python tools/fingerprint.py scan projets/_analyse/*"
     if jid == "new_project":
@@ -105,7 +131,7 @@ def submit(jid: str, game_id: str | None, params: dict | None = None, who: str =
             return {"error": "projet incomplet : dsd init n'a pas abouti"}
         if jid in ("auto", "permute") and (game.path / ".auto_done").exists() and not params.get("force"):
             return {"error": "auto-match deja termine pour ce jeu (cocher 'forcer' pour relancer)"}
-        if jid == "qwen" and not params.get("block"):
+        if jid == "qwen" and not (params.get("block") or params.get("blocks")):
             return {"error": "choisir un bloc pour Qwen"}
     try:
         cmd = command(jid, game, params)

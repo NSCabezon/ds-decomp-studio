@@ -11,6 +11,7 @@
     python studio.py release <game> <block>   give it back to the queue
     python studio.py rebuild <game>           recompute the blocks (claimed blocks are kept)
     python studio.py queue                    who works on what, every game
+    python studio.py sync-tools [<game>]     latest tools of rayman-rr (auto_match...) into one or every game
     python studio.py publish <game> [--private] [--yes]
 """
 import argparse
@@ -44,6 +45,7 @@ def main():
     s = sub.add_parser("done"); s.add_argument("game"); s.add_argument("block"); s.add_argument("--who")
     s = sub.add_parser("release"); s.add_argument("game"); s.add_argument("block"); s.add_argument("--who")
     s = sub.add_parser("rebuild"); s.add_argument("game")
+    s = sub.add_parser("sync-tools"); s.add_argument("game", nargs="?")
     s = sub.add_parser("publish"); s.add_argument("game"); s.add_argument("--private", action="store_true")
     s.add_argument("--yes", action="store_true")
     a = ap.parse_args()
@@ -78,6 +80,13 @@ def main():
     elif a.cmd == "rebuild":
         d = blocks.rebuild(games.get(a.game))
         print(f"{len(d['blocks'])} blocs (generation {d['generation']})")
+    elif a.cmd == "sync-tools":
+        from dsstudio import toolsync
+        targets = [games.get(a.game)] if a.game else [g for g in games.all_games() if g.ready]
+        for g in targets:
+            r = toolsync.sync(g)
+            print(f"{g.id}: " + (r.get("error") or (", ".join(r["changed"]) + " mis a jour" if r["changed"] else "a jour"))
+                  + (f" ({r['warning']})" if r.get("warning") else ""))
     elif a.cmd == "publish":
         g = games.get(a.game)
         if not a.yes:

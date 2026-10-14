@@ -68,7 +68,10 @@ function viewGames() {
     <div class="kpi"><b>${fmt(got)}</b><span>fonctions matchees / ${fmt(tot)}</span></div>
     <div class="kpi"><b>${gs.filter(g => g.remote).length}</b><span>sur GitHub</span></div>
     <div class="kpi"><b>${live}</b><span>blocs en cours</span></div></div>`;
+  const behind = gs.filter(g => g.tools_behind && g.tools_behind.length).length;
   h += `<div class="card"><h3>Mes jeux</h3><p class="hint">Clique sur un jeu pour travailler dessus. "Retirer" le range dans projets/_archive (rien n'est supprime).</p>
+  ${behind ? `<div class="btns" style="margin-bottom:8px"><span class="tag ko">${behind} jeux ont des outils en retard sur rayman-rr (auto_match...)</span>
+    <button class="btn small" onclick="api('run',{id:'sync_all'}).then(r=>r.n&&toast('Mise a jour des outils lancee (onglet Queue)'))">Tout mettre a jour</button></div>` : ""}
   <table><tr><th>Jeu</th><th>Studio</th><th>Etat ROM</th><th class="num">Fonctions</th><th>Code matche</th><th>GitHub</th><th></th></tr>`;
   for (const g of [...gs].sort((a, b) => b.pct_code - a.pct_code || a.title.localeCompare(b.title))) {
     h += `<tr class="click" onclick="selectGame('${g.id}')"><td><b>${esc(g.title)}</b> ${g.id === game() ? '<span class="tag ok">actif</span>' : ""}<div class="hint">${esc(g.id)} &middot; ${esc(g.code)} ${esc(g.version || "")}</div></td>
@@ -131,6 +134,7 @@ async function viewGame() {
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions</div></div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
     ${["moulinette", "auto", "verify", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(O.jobdefs[k].desc)}" onclick="runJob('${k}')">${esc(O.jobdefs[k].label)}</button>`).join("")}
+    ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
   h += `<div class="levels">` + O.levels.map(l => {
@@ -154,6 +158,7 @@ function subBlocks() {
     <span class="hint">${bl.length} blocs ${fLevel !== null ? "niveau " + esc(LV(fLevel).label) : ""} &middot; generation ${G.generation}</span>
     <span style="flex:1"></span>
     <button class="btn" onclick="claimNext()">Prendre le prochain bloc ${fLevel !== null ? esc(LV(fLevel).label) : "le plus facile"}</button>
+    <button class="btn sec" onclick="qwenDialog(null)">Agents Qwen sur plusieurs blocs</button>
     <button class="btn sec" onclick="rebuildBlocks()" title="Refait les blocs avec les fonctions restantes. Les blocs pris ne bougent pas.">Recalculer les blocs</button></div>
     <div class="blocks">`;
   for (const b of bl) {
@@ -186,11 +191,28 @@ async function rebuildBlocks() {
   if (!confirm("Recalculer les blocs libres avec les fonctions restantes ?")) return;
   const r = await api("rebuild", {game: game()}); if (r.ok) { toast(`${r.blocks} blocs`); render(); }
 }
-async function qwenBlock(id) {
-  const r = await api("claim", {game: game(), block: id, kind: "qwen", who: "qwen-" + O.settings.who});
-  if (!r.ok) return;
-  const j = await api("run", {id: "qwen", game: game(), params: {block: id}});
-  if (j.n) toast(`Qwen lance sur ${id} (onglet Queue pour suivre)`);
+function qwenBlock(id) { qwenDialog([id]); }
+function qwenDialog(ids) {
+  window.QWEN_IDS = ids;
+  const s = O.settings, free = G.blocks.filter(b => (b.state === "free" || b.state === "expired") && (fLevel === null || b.level === fLevel)).length;
+  modal(`<h2>Agents Qwen ${ids ? "sur " + esc(ids.join(", ")) : "sur plusieurs blocs"}</h2>
+    <p class="hint">Chaque agent travaille sur une fonction a la fois. Les matches sont verifies par lots (verify complet) puis commites.
+    Pour que les agents tournent vraiment en meme temps, Ollama doit etre lance avec <code>OLLAMA_NUM_PARALLEL</code> au moins egal au nombre d'agents (voir Reglages).</p>
+    <table>${ids ? "" : `<tr><td>Niveau</td><td><select data-k="level"><option value="">le plus facile d'abord</option>${O.levels.map(l => `<option value="${l.n}" ${fLevel === l.n ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></td></tr>
+      ${optField(["count", `Nombre de blocs a donner a Qwen (${free} libres ici)`, "number", Math.min(4, Math.max(free, 1))])}`}
+      ${optField(["agents", "Agents en parallele", "number", s.qwen_agents])}
+      ${optField(["minutes", "Minutes max par fonction", "number", s.qwen_minutes])}
+      ${optField(["max", "Nombre max de fonctions (0 = toutes)", "number", 0])}
+      ${optField(["batch", "Matches verifies ensemble", "number", 10])}
+      <tr><td>Modele</td><td><input data-k="model" value="${esc(s.qwen_model)}"></td></tr></table>
+    <div class="btns" style="margin-top:12px"><button class="btn" onclick="launchQwen()">Lancer les agents</button>
+    <button class="btn sec" onclick="closeModal()">Annuler</button></div>`);
+}
+async function launchQwen() {
+  const o = readFields(); closeModal();
+  if (o.level === "" || o.level === undefined) o.level = null; else o.level = +o.level;
+  const r = await api("qwen_swarm", {game: game(), blocks: window.QWEN_IDS, ...o});
+  if (r.n) toast(`Qwen : ${o.agents} agent(s) sur ${r.blocks.join(", ")} (onglet Queue)`);
   render();
 }
 async function openBlock(id) {
@@ -251,10 +273,35 @@ async function subMap() {
   cv.onclick = async () => { if (cv._f) { const fs = await api(`functions?game=${encodeURIComponent(game())}&state=todo&limit=100000`); const m = (fs.rows || []).find(r => r.addr === cv._f[0]); if (m) showAsm(m.name); } };
 }
 
+const JOB_OPTS = {
+  auto: [["jobs", "Coeurs utilises (-j)", "number", 16], ["permute", "Permuter sur N near misses (0 = non)", "number", 0],
+    ["minutes", "Minutes de permuter par fonction", "number", 2], ["fresh", "Tout refaire (ignorer le cache des echecs)", "check", false],
+    ["dry_run", "Essai a blanc (ne change rien)", "check", false], ["force", "Relancer meme si l'auto-match est marque termine", "check", false]],
+  permute: [["permute", "Nombre de near misses", "number", 10], ["minutes", "Minutes par fonction", "number", 2], ["jobs", "Coeurs (-j)", "number", 16],
+    ["force", "Relancer meme si marque termine", "check", false]],
+  moulinette: [["push", "Pousser sur GitHub si la verification passe", "check", true], ["permute_near", "Permuter sur N near misses (0 = non)", "number", 0],
+    ["near_minutes", "Minutes de permuter par near miss", "number", 5], ["restart", "Oublier les echecs deja essayes", "select", ["", "all", "auto", "permuter", "qwen"]],
+    ["no_drafts", "Sans brouillons m2c", "check", false], ["no_auto", "Sans auto-match", "check", false], ["no_commit", "Verifier seulement (pas de commit)", "check", false]],
+};
+function optField([k, label, type, def]) {
+  if (type === "check") return `<tr><td>${esc(label)}</td><td><input type="checkbox" data-k="${k}" ${def ? "checked" : ""}></td></tr>`;
+  if (type === "select") return `<tr><td>${esc(label)}</td><td><select data-k="${k}">${def.map(v => `<option value="${v}">${v || "non"}</option>`).join("")}</select></td></tr>`;
+  return `<tr><td>${esc(label)}</td><td><input type="number" data-k="${k}" value="${def}" style="width:90px"></td></tr>`;
+}
+function readFields() {
+  const o = {};
+  document.querySelectorAll("#modalbody [data-k]").forEach(e => { o[e.dataset.k] = e.type === "checkbox" ? e.checked : e.type === "number" ? +e.value : e.value; });
+  return o;
+}
 async function runJob(id, params) {
+  if (JOB_OPTS[id] && !params) {
+    const opts = JOB_OPTS[id].map(o => o[0] === "push" ? [o[0], o[1], o[2], !!G.game.remote] : o);
+    modal(`<h2>${esc(O.jobdefs[id].label)}</h2><p class="hint">${esc(O.jobdefs[id].desc)}</p><table>${opts.map(optField).join("")}</table>
+      <div class="btns" style="margin-top:12px"><button class="btn" onclick="closeModal();runJob('${id}',readFields())">Lancer</button>
+      <button class="btn sec" onclick="closeModal()">Annuler</button></div>`);
+    return;
+  }
   params = params || {};
-  if (id === "permute") { const n = prompt("Nombre de near misses pour le permuter ?", "10"); if (!n) return; params.n = +n; params.minutes = 2; }
-  if (id === "moulinette" && G.game.remote) params.push = confirm("Pousser sur GitHub si la verification passe ?");
   let r = await api("run", {id, game: game(), params});
   if (r.error && r.error.includes("forcer") && confirm("Auto-match deja termine sur ce jeu. Relancer quand meme ?")) r = await api("run", {id, game: game(), params: {...params, force: true}});
   if (r.n) toast(`Tache #${r.n} ajoutee a la queue`);
@@ -329,6 +376,7 @@ function viewSettings() {
     <tr><td>Ton nom (pour prendre des blocs)</td><td><input id="s-who" value="${esc(s.who)}"></td></tr>
     <tr><td>Taches machine en parallele</td><td><input id="s-par" type="number" min="1" max="8" value="${s.max_parallel_jobs}"></td></tr>
     <tr><td>Modele Qwen (Ollama)</td><td><input id="s-model" value="${esc(s.qwen_model)}"></td></tr>
+    <tr><td>Agents Qwen en parallele (par defaut)<div class="hint">Ollama doit avoir OLLAMA_NUM_PARALLEL &ge; ce nombre (variable d'environnement, puis redemarrer Ollama). Avec 16 Go de VRAM : environ 4 pour qwen9-ctx, 8 pour qwen-ctx (4b).</div></td><td><input id="s-agents" type="number" min="1" max="16" value="${s.qwen_agents}"></td></tr>
     <tr><td>Minutes max par fonction (Qwen)</td><td><input id="s-min" type="number" min="1" max="60" value="${s.qwen_minutes}"></td></tr>
     <tr><td>Publier les prises de blocs sur GitHub</td><td><input id="s-push" type="checkbox" ${s.push_claims ? "checked" : ""}></td></tr>
     <tr><td>Compte GitHub</td><td><input id="s-owner" value="${esc(s.github_owner)}" placeholder="rempli a la 1re publication"></td></tr></table>
@@ -336,7 +384,7 @@ function viewSettings() {
 }
 async function saveSettings() {
   const r = await api("settings", {who: $("#s-who").value.trim(), max_parallel_jobs: +$("#s-par").value, qwen_model: $("#s-model").value.trim(),
-    qwen_minutes: +$("#s-min").value, push_claims: $("#s-push").checked, github_owner: $("#s-owner").value.trim()});
+    qwen_minutes: +$("#s-min").value, qwen_agents: +$("#s-agents").value, push_claims: $("#s-push").checked, github_owner: $("#s-owner").value.trim()});
   if (!r.error) { O.settings = r; toast("Reglages enregistres"); }
 }
 

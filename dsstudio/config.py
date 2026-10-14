@@ -47,6 +47,7 @@ DEFAULTS = {
     "github_owner": "",                          # filled from `gh` on first publish
     "qwen_model": "qwen9-ctx",
     "qwen_minutes": 5,
+    "qwen_agents": 4,                            # functions worked on at once (Ollama needs OLLAMA_NUM_PARALLEL >= this)
     "max_parallel_jobs": 2,
     "active_game": "",
     "push_claims": True,                         # claims are pushed to GitHub when the game has a remote

@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
-"""Qwen (Ollama, local) works on the functions of one studio block of any game.
+"""Qwen agents (Ollama, local) work on the functions of studio blocks of any game.
 
-    python workers/qwen_block.py --project <game dir> --block L1-01003 [--model qwen9-ctx] [--minutes 5]
+    python workers/qwen_block.py --project <game dir> --blocks L1-01003,L1-01004 [--agents 4] [--minutes 5] [--max 0]
 
-Generic version of rayman-rr/tools/qwen_auto.py. For each unmatched function of the block that has a starting
-draft (build/auto/near/, auto_match cache, build/drafts/), the model rewrites the C file until the project's
-probe_compiler.py says MATCH. Only an exact match is integrated (src/auto/ + delinks.txt), and only if
-`match.py verify` passes; otherwise it is rolled back. Each win is committed (and pushed if the game has a remote).
-Create <project>/build/qwen_auto/STOP to stop after the current function.
+Generic version of rayman-rr/tools/qwen_auto.py, with several agents at once. Each agent takes the next unmatched
+function that has a starting draft (build/auto/near/, auto_match cache, build/drafts/) and asks the model to
+rewrite it until the project's probe_compiler.py says MATCH. Agents never touch the project: matches go to one
+integrator, which adds them in batches (src/auto/ + delinks.txt, clang-format), runs `match.py verify`, and
+commits (+ pushes) only if it passes; a failing batch is retried one function at a time.
+Ollama answers N requests at once only if it was started with OLLAMA_NUM_PARALLEL >= N.
+Create <project>/build/qwen_auto/STOP to stop: agents finish their current function, the integrator flushes.
 """
 import argparse
 import difflib
 import json
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--project", required=True, type=Path)
-ap.add_argument("--block", required=True)
+ap.add_argument("--blocks", "--block", dest="blocks", required=True, help="block ids, comma separated")
 ap.add_argument("--model", default="qwen9-ctx")
 ap.add_argument("--minutes", type=float, default=5.0, help="time limit per function")
+ap.add_argument("--agents", type=int, default=1, help="functions worked on at the same time")
+ap.add_argument("--max", type=int, default=0, help="at most this many functions (0 = all)")
+ap.add_argument("--batch", type=int, default=10, help="matches verified together")
 ap.add_argument("--no-push", action="store_true")
 args = ap.parse_args()
+BLOCKS = [b.strip() for b in args.blocks.split(",") if b.strip()]
+_log_lock = threading.Lock()
 
 ROOT = args.project.resolve()
 sys.path.insert(0, str(ROOT / "tools"))
@@ -51,9 +61,10 @@ def run(cmd, **kw):
 
 
 def log(msg):
-    print(msg, flush=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    with _log_lock:
+        print(msg, flush=True)
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
 
 def probe(path, name, addr, profile, show=True):
@@ -130,7 +141,7 @@ def chat_loop(work, name, addr, profile, out0):
         attempt += 1
         ok, out = probe(work, name, addr, profile)
         s = score(out)
-        log(f"  essai {attempt}: {out.strip().splitlines()[-1][-60:] if out.strip() else '?'} (meilleur {min(s, best_score)})")
+        log(f"  {name} essai {attempt}: {out.strip().splitlines()[-1][-60:] if out.strip() else '?'} (meilleur {min(s, best_score)})")
         if ok:
             return True
         if s < best_score:
@@ -143,10 +154,11 @@ def chat_loop(work, name, addr, profile, out0):
     return False
 
 
-def integrate_and_verify(name, size, addr, source):
+def integrate_and_verify(found):
+    """found = [(name, size, addr, source)]. True if the build still matches with all of them."""
     import auto_match as am
     saved = (am.DELINKS.read_bytes(), am.COMPILERS_TXT.read_bytes() if am.COMPILERS_TXT.exists() else b"")
-    created = am.integrate([(name, size, addr, source)])
+    created = am.integrate(found)
     # Same style as the CI (clang-format), so the commit never breaks the lint check; verify runs after it
     pc = shutil.which("pre-commit")
     if pc:
@@ -163,19 +175,70 @@ def integrate_and_verify(name, size, addr, source):
     return False
 
 
-def touch_claim():
-    p = ROOT / ".studio" / "claims" / f"{args.block}.json"
-    if p.exists():
-        c = json.loads(p.read_text(encoding="utf-8"))
-        c["touched"] = time.time()
-        p.write_text(json.dumps(c, indent=1) + "\n", encoding="utf-8", newline="\n")
+def commit(found):
+    names = [f[0] for f in found]
+    run(["git", "add", "src/auto", f"config/{VERSION}"])
+    msg = f"Match {len(names)} function(s) (qwen, {', '.join(BLOCKS)})\n\n" + "\n".join(names) + \
+        "\n\nCo-Authored-By: Qwen <noreply@qwen.ai>\n"
+    run(["git", "commit", "-q", "-m", msg, "--", "src/auto", f"config/{VERSION}"])
+    if not args.no_push and run(["git", "remote"]).stdout.strip():
+        ok = run(["git", "push", "-q", "origin", "HEAD"]).returncode == 0
+        log(f"push {'ok' if ok else 'rate (sera refait au prochain commit)'}")
+
+
+def touch_claims():
+    for b in BLOCKS:
+        p = ROOT / ".studio" / "claims" / f"{b}.json"
+        if p.exists():
+            c = json.loads(p.read_text(encoding="utf-8"))
+            c["touched"] = time.time()
+            p.write_text(json.dumps(c, indent=1) + "\n", encoding="utf-8", newline="\n")
+
+
+class Integrator(threading.Thread):
+    """Single writer of the project: batches of matches -> verify -> commit. Failing batches are split."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.q, self.won, self.lost = queue.Queue(), [], []
+
+    def flush(self, batch):
+        if integrate_and_verify(batch):
+            commit(batch)
+            self.won += batch
+            log(f"INTEGRE + VERIFY PASSED : {', '.join(f[0] for f in batch)}")
+        elif len(batch) > 1:
+            log(f"verify echoue sur un lot de {len(batch)} : reessai une par une")
+            for f in batch:
+                self.flush([f])
+        else:
+            self.lost.append(batch[0][0])
+            log(f"{batch[0][0]}: match seul mais VERIFY echoue une fois integre (annule)")
+        touch_claims()
+
+    def run(self):
+        pending = []
+        while True:
+            try:
+                item = self.q.get(timeout=30)
+            except queue.Empty:
+                item = "tick"
+            if item is None:  # end: flush what is left
+                if pending:
+                    self.flush(pending)
+                return
+            if item != "tick":
+                pending.append(item)
+            if pending and (len(pending) >= args.batch or item == "tick"):
+                self.flush(pending)
+                pending = []
 
 
 def main():
-    blocks = json.loads((ROOT / ".studio" / "blocks.json").read_text(encoding="utf-8"))["blocks"]
-    block = next((b for b in blocks if b["id"] == args.block), None)
-    if block is None:
-        sys.exit(f"bloc {args.block} introuvable dans .studio/blocks.json")
+    blocks = {b["id"]: b for b in json.loads((ROOT / ".studio" / "blocks.json").read_text(encoding="utf-8"))["blocks"]}
+    missing = [b for b in BLOCKS if b not in blocks]
+    if missing:
+        sys.exit(f"blocs introuvables dans .studio/blocks.json : {missing}")
     import auto_match as am
     syms = {}
     for line in am.SYMBOLS.read_text(encoding="utf-8").splitlines():
@@ -184,48 +247,62 @@ def main():
             syms[m.group(1)] = (int(m.group(4), 16), int(m.group(3), 16), m.group(2))
     covered = am.covered_ranges()
     profiles = [c[0] for c in am.COMPILERS[:2]]
+    todo = []
+    for b in BLOCKS:
+        for name in blocks[b]["functions"]:
+            if name not in syms:
+                continue
+            addr, size, mode = syms[name]
+            if mode != "arm" or any(a <= addr < e for a, e in covered):
+                continue
+            src = starting_draft(name)
+            if src:
+                todo.append((name, size, addr, src))
+    todo.sort(key=lambda t: t[1])  # smallest first: they match most often
+    if args.max:
+        todo = todo[:args.max]
+    log(f"{len(todo)} fonctions avec brouillon, {args.agents} agent(s), modele {args.model}, blocs {', '.join(BLOCKS)}")
     STOP.unlink(missing_ok=True)
-    won = tried = 0
-    for name in block["functions"]:
+    integ = Integrator()
+    integ.start()
+    tried = [0]
+
+    def agent(item):
+        name, size, addr, src = item
         if STOP.exists():
-            log("fichier STOP trouve : arret.")
-            break
-        if name not in syms:
-            continue
-        addr, size, mode = syms[name]
-        if mode != "arm" or any(a <= addr < b for a, b in covered):
-            continue
-        src = starting_draft(name)
-        if not src:
-            log(f"{name}: pas de brouillon (lancez l'auto-match ou la moulinette d'abord)")
-            continue
-        tried += 1
+            return
+        tried[0] += 1
         work = WORK / f"{name}.c"
         work.write_text(src, encoding="utf-8", newline="\n")
         results = [(score(o), p, o) for p in profiles for _, o in [probe(work, name, addr, p)]]
         s0, profile, out0 = min(results, key=lambda r: r[0])
         log(f"{name} ({size} octets, {profile}) : depart {s0} instructions differentes")
         t0 = time.time()
-        ok = s0 == 0 or chat_loop(work, name, addr, profile, out0)
-        result = "pas de match"
-        if ok:
+        if s0 == 0 or chat_loop(work, name, addr, profile, out0):
             source = work.read_text(encoding="utf-8")
             if profile != profiles[0] and not source.startswith(am.MARKER):
                 source = f"{am.MARKER}{profile} */\n" + source
-            if integrate_and_verify(name, size, addr, source):
-                run(["git", "add", "src/auto", f"config/{VERSION}"])
-                run(["git", "commit", "-q", "-m", f"Match {name} (qwen, block {args.block})\n\nCo-Authored-By: Qwen <noreply@qwen.ai>\n",
-                     "--", "src/auto", f"config/{VERSION}"])
-                won += 1
-                result = "MATCH + verifie + commite"
-                if not args.no_push and run(["git", "remote"]).stdout.strip():
-                    result += " + pousse" if run(["git", "push", "-q", "origin", "HEAD"]).returncode == 0 else " (push rate)"
-            else:
-                result = "match mais VERIFY echoue (annule)"
-        touch_claim()
-        log(f"{name}: {result} ({time.time() - t0:.0f}s)")
-    log(f"fini : {won}/{tried} nouvelles fonctions sur le bloc {args.block}")
+            log(f"{name}: MATCH en {time.time() - t0:.0f}s -> file d'integration")
+            integ.q.put((name, size, addr, source))
+        else:
+            log(f"{name}: pas de match ({time.time() - t0:.0f}s)")
+
+    with ThreadPoolExecutor(max_workers=max(1, args.agents)) as ex:
+        list(ex.map(agent, todo))
+    if STOP.exists():
+        log("fichier STOP trouve : arret apres les fonctions en cours.")
+    integ.q.put(None)
+    integ.join()
+    touch_claims()
+    log(f"fini : {len(integ.won)} nouvelles fonctions sur {tried[0]} essayees"
+        + (f" ; rejetees au verify : {', '.join(integ.lost)}" if integ.lost else ""))
 
 
 if __name__ == "__main__":
-    main()
+    lock_mod = ROOT / "tools" / "pipeline_lock.py"
+    if lock_mod.exists():  # same lock as the moulinette / auto_match of this game: never two pipelines at once
+        from pipeline_lock import pipeline_lock
+        with pipeline_lock("qwen_block", ROOT):
+            main()
+    else:
+        main()
