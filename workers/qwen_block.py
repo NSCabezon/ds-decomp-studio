@@ -54,6 +54,8 @@ Allowed changes: loop form (for/while/do-while, *p++ vs index), declaration orde
 (s32/u32/s16/u16/s8/u8, signed/unsigned), casts, splitting or merging expressions, returning a value.
 Keep the first lines (#define / #include) and the function name. Never make the function static
 (the game exports it). ASCII only.
+A short context may come first (which library or part of the game the function is in, what it calls, by real name
+when known): use it to choose meaningful types and variable names, but the target assembly always decides.
 Answer with the COMPLETE new C file in a single ```c code block and nothing else."""
 
 
@@ -121,16 +123,56 @@ def unstatic(code, name):
     return re.sub(rf"(?<!\w)static\s+(?=[^;{{}}]*(?<!\w){re.escape(name)}\s*\()", "", code)
 
 
+CODEMAP = None
+_codemap_lock = threading.Lock()
+
+
+def code_context(name: str) -> str:
+    """Which part of the game the function is in (NitroSDK module, C library, game engine...) and the real names of
+    what it calls (tools/codemap.py of the project). Empty if the project has no codemap.py yet."""
+    with _codemap_lock:
+        if CODEMAP is None:
+            _load_codemap()
+    if not CODEMAP:
+        return ""
+    try:
+        return CODEMAP.context(name)
+    except Exception:
+        return ""
+
+
+def _load_codemap():
+    global CODEMAP
+    if CODEMAP is None:
+        try:
+            import codemap
+            engine = ""
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                from dsstudio import games
+                studio = games.STUDIOS.get(ROOT.name)
+                engine = f"engine of {studio} (the developer of {games.TITLES.get(ROOT.name, ROOT.name)})" if studio else ""
+            except Exception:
+                pass
+            CODEMAP = codemap.CodeMap(engine=engine)
+            CODEMAP.callers("")  # reads the disassembly now, under the lock (agents are threads)
+        except Exception as e:
+            log(f"(pas de contexte de code : {e})")
+            CODEMAP = False
+
+
 def chat_loop(work, name, addr, profile, out0):
     """Asks for a full new file each time, always from the BEST version so far, with the failed attempts listed."""
     deadline = time.time() + args.minutes * 60
     best, best_out, best_score = work.read_text(encoding="utf-8"), out0, score(out0)
+    context = code_context(name)
+    context = f"Context (where this code comes from):\n{context}\n\n" if context else ""
     notes, no_code, attempt = [], 0, 0
     while time.time() < deadline:
         extra = ("\n\nAlready tried from this file, all worse or equal (do something different):\n" +
                  "\n".join(notes[-6:])) if notes else ""
         msgs = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": f"File:\n```c\n{best}```\n\nResult of this file:\n{best_out[-6000:]}{extra}"}]
+                {"role": "user", "content": f"{context}File:\n```c\n{best}```\n\nResult of this file:\n{best_out[-6000:]}{extra}"}]
         try:
             reply = ask(msgs, min(1.0, 0.4 + 0.1 * len(notes)), deadline)
         except Exception as e:
