@@ -112,7 +112,8 @@ def starting_draft(name):
 
 def ask(messages, temp, deadline):
     body = json.dumps({"model": args.model, "messages": messages, "stream": False,
-                       "options": {"temperature": temp}, "think": False}).encode()
+                       # a C file is a few hundred tokens: a cap stops a runaway answer from eating the whole time
+                       "options": {"temperature": temp, "num_predict": 3072}, "think": False}).encode()
     req = urllib.request.Request("http://127.0.0.1:11434/api/chat", body, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=max(30, deadline - time.time())) as r:
         return json.loads(r.read())["message"]["content"]
@@ -177,8 +178,8 @@ def chat_loop(work, name, addr, profile, out0):
             reply = ask(msgs, min(1.0, 0.4 + 0.1 * len(notes)), deadline)
         except Exception as e:
             if "timed out" in str(e):
-                log(f"  {name}: pas de reponse d'Ollama avant la limite de temps (modele en chargement, ou Ollama traite"
-                    " les agents un par un : augmenter les minutes ou OLLAMA_NUM_PARALLEL)")
+                log(f"  {name}: limite de temps atteinte pendant une reponse d'Ollama (reponse trop longue, modele en"
+                    " chargement, ou Ollama traite les agents un par un : augmenter les minutes ou OLLAMA_NUM_PARALLEL)")
             else:
                 log(f"  {name}: Ollama ne repond pas ({e}) : lancez Ollama")
             return False
