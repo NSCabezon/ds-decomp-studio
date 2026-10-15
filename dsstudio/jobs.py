@@ -36,6 +36,14 @@ DEFS = {
                "retires (build ninja + bisection), puis un verify complet"),
     "donors_index": ("Indexer les decomps externes", "global", 1800,
                      "compile les depots de decomps-externes/ et met a jour donors.sqlite"),
+    "names": ("Nommer (SDK, MSL...)", "game", 900,
+              "vrais noms des fonctions et donnees reprises des autres decomps (empreinte + appels), renomme "
+              "symbols.txt, sources et fichiers, puis verifie la ROM"),
+    "regroup": ("Regrouper en vrais fichiers", "game", 900,
+                "fusionne les src/auto et src/donor voisins venant du meme fichier d'origine (src/nitro/os/os_thread.c...), "
+                "chaque fusion compilee et comparee, puis la ROM"),
+    "cleanup": ("Nettoyer le C de m2c", "game", 600,
+                "retire les notes de m2c (/* extern */...), lignes vides, clang-format ; la ROM est reconstruite"),
     "new_project": ("Ajouter un jeu", "global", 600, "dsd init + build depuis une ROM de roms/"),
     "publish": ("Publier sur GitHub", "game", 180, "cree le repo public et pousse"),
 }
@@ -122,6 +130,8 @@ def command(jid: str, game, p: dict) -> str:
         return cmd + " && python tools/donor_match.py --list"
     if jid == "donors_index":
         return "python tools/donors.py index"
+    if jid in ("names", "regroup", "cleanup"):
+        return f"python tools/{jid}.py" + (" --dry-run" if p.get("dry_run") else "")
     if jid == "scan":
         return "python tools/fingerprint.py scan projets/_analyse/*"
     if jid == "new_project":
