@@ -65,12 +65,12 @@ def add_badges(g) -> bool:
     p = g.path / "README.md"
     text = p.read_text(encoding="utf-8")
     block = badges(g)
-    if START in text:
-        new = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _m: block, text, flags=re.S)
-    else:
-        m = re.search(r"^# .*\n", text, re.M)
-        at = m.end() if m else 0
-        new = text[:at] + "\n" + block + "\n" + text[at:]
+    # the block is always rewritten under the title: `# Title`, or a title underlined with ===== (Rayman's README)
+    rest = re.sub(r"\n*" + re.escape(START) + r".*?" + re.escape(END) + r"\n*", "\n\n", text, flags=re.S)
+    rest = rest.lstrip("\n")
+    m = re.search(r"^# .*\n", rest, re.M) or re.search(r"^=+[ \t]*\n", rest, re.M)
+    at = m.end() if m else 0
+    new = rest[:at] + "\n" + block + "\n\n" + rest[at:].lstrip("\n")
     if new != text:
         p.write_text(new, encoding="utf-8", newline="\n")
     return new != text
@@ -94,7 +94,9 @@ def upload(g, log=print) -> bool:
     req = urllib.request.Request(f"{SITE}/api/v1/projects/{repo}/reports?{query}",
                                  data=gzip.compress(report.read_bytes()), method="POST",
                                  headers={"Authorization": f"Bearer {token}", "Content-Encoding": "gzip",
-                                          "Content-Type": "application/json"})
+                                          "Content-Type": "application/json",
+                                          # Cloudflare refuses Python's default agent (error 1010)
+                                          "User-Agent": "ds-decomp-studio (+https://github.com/liolu/ds-decomp-studio)"})
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
             answer = json.loads(r.read() or b"{}")
