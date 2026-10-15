@@ -110,13 +110,41 @@ def starting_draft(name):
     return None
 
 
+CODE_BLOCK = re.compile(r"```[a-zA-Z]*[ \t]*\n.*?```", re.S)
+
+
 def ask(messages, temp, deadline):
-    body = json.dumps({"model": args.model, "messages": messages, "stream": False,
-                       # a C file is a few hundred tokens: a cap stops a runaway answer from eating the whole time
-                       "options": {"temperature": temp, "num_predict": 3072}, "think": False}).encode()
+    """The model's answer, read as it is written and cut as soon as the ```c block is closed: some models go on
+    writing after the code (explanations, a second version...) and would use the whole time of the function."""
+    body = json.dumps({"model": args.model, "messages": messages, "stream": True,
+                       "options": {"temperature": temp, "num_predict": 2048}, "think": False}).encode()
     req = urllib.request.Request("http://127.0.0.1:11434/api/chat", body, {"Content-Type": "application/json"})
+    text = []
     with urllib.request.urlopen(req, timeout=max(30, deadline - time.time())) as r:
-        return json.loads(r.read())["message"]["content"]
+        for line in r:  # one JSON object per line
+            if not line.strip():
+                continue
+            part = json.loads(line)
+            text.append(part.get("message", {}).get("content", ""))
+            if part.get("done") or time.time() > deadline:
+                break
+            if "```" in text[-1] and CODE_BLOCK.search("".join(text)):
+                break  # closing the connection stops the generation in Ollama
+    return "".join(text)
+
+
+NO_PARALLEL = {"qwen35"}  # architectures Ollama runs one request at a time ("does not support parallel requests")
+
+
+def model_runs_in_parallel(model: str) -> bool:
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/show", json.dumps({"model": model}).encode(),
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            arch = json.loads(r.read()).get("model_info", {}).get("general.architecture", "")
+        return arch not in NO_PARALLEL
+    except Exception:
+        return True
 
 
 def unstatic(code, name):
@@ -362,6 +390,10 @@ def main():
     todo.sort(key=lambda t: t[1])  # smallest first: they match most often
     if args.max:
         todo = todo[:args.max]
+    if args.agents > 1 and not model_runs_in_parallel(args.model):
+        # several agents would only queue behind each other, each one getting a fraction of its time limit
+        log(f"le modele {args.model} ne repond qu'a une requete a la fois dans Ollama : 1 agent au lieu de {args.agents}")
+        args.agents = 1
     log(f"{len(todo)} fonctions avec brouillon, {args.agents} agent(s), modele {args.model}, blocs {', '.join(BLOCKS)}")
     STOP.unlink(missing_ok=True)
     integ = Integrator()
