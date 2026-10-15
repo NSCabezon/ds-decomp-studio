@@ -41,12 +41,25 @@ def fix_title(g) -> None:
         p.write_text(n, encoding="utf-8", newline="\n")
 
 
+def push_head(repo) -> object:
+    """git push; when GitHub has commits made elsewhere (a README edited on the site), they are taken first
+    (rebase: our commits go on top) and the push is tried again."""
+    r = gitutil.git(repo, "push", "-q", "origin", "HEAD", timeout=300)
+    if r.returncode and "fetch first" in r.stderr + r.stdout:
+        branch = gitutil.git(repo, "branch", "--show-current").stdout.strip() or "main"
+        if gitutil.git(repo, "pull", "-q", "--rebase", "--autostash", "origin", branch, timeout=300).returncode == 0:
+            r = gitutil.git(repo, "push", "-q", "origin", "HEAD", timeout=300)
+        else:
+            gitutil.git(repo, "rebase", "--abort")
+    return r
+
+
 def commit_push(repo, paths, message, push=True, log=print) -> None:
     if not gitutil.git(repo, "status", "--porcelain", "--", *paths).stdout.strip():
         ahead = gitutil.git(repo, "rev-list", "--count", "@{u}..HEAD").stdout.strip()
         if push and ahead not in ("", "0") and gitutil.has_remote(repo):
             # README unchanged, but commits wait (matches, tools): they are part of the progress
-            r = gitutil.git(repo, "push", "-q", "origin", "HEAD", timeout=300)
+            r = push_head(repo)
             log(f"  inchange, {ahead} commit(s) pousse(s)" if r.returncode == 0 else "  push rate : " + r.stderr.strip()[-300:])
         else:
             log("  inchange")
@@ -56,7 +69,7 @@ def commit_push(repo, paths, message, push=True, log=print) -> None:
         log("  commit impossible : " + (r.stderr or r.stdout).strip()[-300:])
         return
     if push and gitutil.has_remote(repo):
-        r = gitutil.git(repo, "push", "-q", "origin", "HEAD", timeout=300)
+        r = push_head(repo)
         log("  pousse" if r.returncode == 0 else "  push rate : " + r.stderr.strip()[-300:])
     else:
         log("  commite (pas de push)")
