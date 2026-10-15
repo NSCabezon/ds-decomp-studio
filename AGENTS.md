@@ -34,3 +34,6 @@ python studio/studio.py done <game> <block>                    # or `release` to
 - `gametools/`: the ONLY source of the matching tools copied into every game's `tools/` (`studio.py sync-tools`).
   They read game-specific values from `tools/project.py`. Change tools here, never in a game's copy.
   `gametools/find_culprits.py` finds the files that break the ROM from one build (byte comparison).
+  `gametools/clone_match.py` multiplies matches without AI: same code (or same code with other constants) as a
+  matched function, in this game or another of our projects; `--list` writes build/clone/families.json, which
+  the studio reads for level 0 and to put the functions worth several matches first in the queue.

@@ -38,7 +38,7 @@ $("#modal").onclick = e => { if (e.target.id === "modal") $("#modal").classList.
 const closeModal = () => $("#modal").classList.remove("on");
 const LV = n => O.levels[n] || {label: "?"};
 const JD = k => (O.jobdefs && O.jobdefs[k]) || {label: k, desc: "(redemarre le studio pour cette tache)"};
-const portNote = p => p.game.startsWith("donor:") ? "decomp externe " + esc(p.game.slice(6)) + " (" + esc(p.name) + ")" : "copier depuis " + esc(p.game);
+const portNote = p => p.game.startsWith("donor:") ? "decomp externe " + esc(p.game.slice(6)) + " (" + esc(p.name) + ")" : p.game.startsWith("clone:") ? "clone de " + esc(p.name) + " (meme code dans ce jeu)" : "copier depuis " + esc(p.game);
 const game = () => O && O.settings.active_game;
 const pctBar = p => `<div class="pct"><div class="bar"><i style="width:${Math.min(p, 100)}%"></i></div><b>${p.toFixed(2)}%</b></div>`;
 
@@ -153,7 +153,7 @@ async function viewGame() {
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions${g.modules > 1 ? ` (${g.modules} modules, principal ${g.pct_main.toFixed(2)} %)` : ""}</div>
     ${g.left_manual ? `<div class="hint" style="text-align:right"><a href="#game" onclick="sub='functions';fnKind='manual';render();return false">${fmt(g.left_manual)} a faire a la main</a> (Thumb, overlays, ITCM : pas d'outil auto)</div>` : ""}</div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
-    ${["moulinette", "auto", "donors", "names", "regroup", "cleanup", "progress", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
+    ${["moulinette", "auto", "clone", "donors", "names", "regroup", "cleanup", "progress", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
     ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
@@ -190,7 +190,7 @@ function subBlocks() {
       ${c ? `<div class="hint">${esc(c.who)} (${esc(O.kinds[c.kind] || c.kind)}) &middot; ${ago(c.touched)}${c.note ? " &middot; " + esc(c.note) : ""}</div>` : ""}
       <div class="btns">
         <button class="btn small sec" onclick="openBlock('${b.id}')">Voir / brief</button>
-        ${b.level === 0 && b.left ? `<button class="btn small" title="Reprend les fonctions de ce bloc deja decompilees ailleurs (compile + compare + verify)" onclick="runJob('donors',{block:'${b.id}'})">Reprendre</button>` : ""}
+        ${b.level === 0 && b.left ? `<button class="btn small" title="Reprend les fonctions de ce bloc deja decompilees ailleurs : clones dans nos jeux puis decomps externes (compile + compare + verify)" onclick="runJob('donors',{block:'${b.id}'})">Reprendre</button>` : ""}
         ${b.state === "free" || b.state === "expired" ? `<button class="btn small" onclick="claimBlock('${b.id}','human')">Prendre</button>
           <button class="btn small sec" onclick="qwenBlock('${b.id}')" title="Qwen (Ollama local) travaille sur ce bloc">Qwen</button>` : ""}
         ${mine || (c && c.kind !== "human") ? `<button class="btn small green" onclick="releaseBlock('${b.id}',true)">Termine</button>
@@ -296,6 +296,11 @@ async function subMap() {
 }
 
 const JOB_OPTS = {
+  clone: [["other_games", "Prendre aussi les matchs de nos autres jeux", "check", true],
+    ["max", "Nombre max de fonctions a integrer (0 = toutes)", "number", 0],
+    ["block", "Seulement le bloc (ex. L0-01001, vide = tout le jeu)", "text", ""],
+    ["list", "Seulement lister les familles (rapide, remplit le niveau Portable et l'ordre de la file)", "check", false],
+    ["dry_run", "Essai a blanc (ne change rien)", "check", false]],
   donors: [["max", "Nombre max de fonctions a reprendre (un lot ; 0 = toutes)", "number", 50],
     ["block", "Seulement le bloc (ex. L0-01001, vide = tout le jeu)", "text", ""],
     ["jobs", "Fonctions essayees en parallele (-j)", "number", 14],
@@ -430,7 +435,7 @@ async function viewEngine() {
   h += `<div class="split"><div class="card"><h3>Jeux indexes (base d'empreintes)</h3><p class="hint">SDK = code Nintendo present dans 5 jeux ou plus. Unique = code propre au jeu.</p>
     <table><tr><th>Jeu</th><th class="num">Fonctions</th><th class="num">SDK</th><th class="num">Unique</th></tr>
     ${d.games.map(g => `<tr><td>${esc(g.title)}<div class="hint">${esc(g.studio)}</div></td><td class="num">${fmt(g.functions)}</td><td class="num">${fmt(g.sdk)}</td><td class="num">${fmt(g.unique)}</td></tr>`).join("")}</table>
-    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button><button class="btn small sec" title="compile les depots de decomps-externes/ (NitroSDK, pret...)" onclick="api('run',{id:'donors_index'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les decomps externes</button></div></div>
+    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button><button class="btn small sec" title="compile les depots de decomps-externes/ (NitroSDK, pret...)" onclick="api('run',{id:'donors_index'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les decomps externes</button><button class="btn small sec" title="${esc(JD('clone_all').desc)}" onclick="api('run',{id:'clone_all'}).then(r=>r.n&&toast('Clonage lance'))">Cloner les jumelles dans tous les jeux</button></div></div>
     <div class="card"><h3>Moteurs partages entre jeux</h3><p class="hint">Fonctions identiques entre deux jeux, hors SDK : du code moteur reutilise. Un match dans un jeu = gratuit dans l'autre (niveau "Portable").</p>
     <table><tr><th>Jeu A</th><th>Jeu B</th><th class="num">Moteur commun</th><th class="num">SDK commun</th></tr>
     ${d.pairs.slice(0, 40).map(p => `<tr><td>${esc(p.a)}</td><td>${esc(p.b)}</td><td class="num"><b>${fmt(p.engine)}</b></td><td class="num hint">${fmt(p.sdk)}</td></tr>`).join("")}</table></div></div>`;

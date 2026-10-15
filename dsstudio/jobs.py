@@ -34,6 +34,11 @@ DEFS = {
     "donors": ("Reprendre les matchs des autres decomps", "game", 1200,
                "fonctions deja decompilees ailleurs (NitroSDK, pret...) : compile + compare, fichiers fautifs "
                "retires (build ninja + bisection), puis un verify complet"),
+    "clone": ("Cloner les jumelles (sans IA)", "game", 900,
+              "fonctions au code identique (ou aux constantes pres) a une fonction deja matchee, ici ou dans un autre "
+              "de nos jeux : C copie + renomme, compile + compare, puis verify"),
+    "clone_all": ("Cloner les jumelles dans tous les jeux", "global", 7200,
+                  "le clonage dans chaque jeu (1 match dans un jeu = 1 match dans chaque jeu qui a la meme fonction)"),
     "donors_index": ("Indexer les decomps externes", "global", 1800,
                      "compile les depots de decomps-externes/ et met a jour donors.sqlite"),
     "names": ("Nommer (SDK, MSL...)", "game", 900,
@@ -59,6 +64,14 @@ _procs: dict = {}
 
 def _q(s: str) -> str:
     return "'" + str(s).replace("'", "'\\''") + "'"
+
+
+def _block_functions(game, block_id: str) -> list[str]:
+    from . import blocks as _blocks
+    b = next((b for b in _blocks.load(game)["blocks"] if b["id"] == block_id), None)
+    if b is None:
+        raise KeyError(f"bloc inconnu : {block_id}")
+    return b["functions"]
 
 
 def command(jid: str, game, p: dict) -> str:
@@ -111,17 +124,35 @@ def command(jid: str, game, p: dict) -> str:
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools {_q(game.id)}"
     if jid == "sync_all":
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools"
+    if jid == "clone":
+        cmd = "python tools/clone_match.py"
+        if p.get("list"):
+            return cmd + " --list"
+        if p.get("other_games", True):
+            cmd += " --other-games"
+        if p.get("block"):
+            cmd += " --names " + _q(",".join(_block_functions(game, p["block"])))
+        if int(p.get("max") or 0):
+            cmd += f" --max {int(p['max'])}"
+        if p.get("dry_run"):
+            cmd += " --dry-run"
+        return cmd
+    if jid == "clone_all":
+        # one game after the other; a game busy with another pipeline is skipped (its lock), the others go on
+        dirs = " ".join(_q(f"projets/{g.id}") for g in games.all_games() if g.ready)
+        return (f"for d in {dirs}; do [ -f \"$d/tools/clone_match.py\" ] || continue; echo \"== $d\"; "
+                f"(cd \"$d\" && python tools/clone_match.py --other-games); done")
     if jid == "donors":
         # by block (the functions of one block), by batch (--max N matches), or only the list of candidates
         cmd = "python tools/donor_match.py"
         if p.get("list"):
             return cmd + " --list"
         if p.get("block"):
-            from . import blocks as _blocks
-            b = next((b for b in _blocks.load(game)["blocks"] if b["id"] == p["block"]), None)
-            if b is None:
-                raise KeyError(f"bloc inconnu : {p['block']}")
-            cmd += " --names " + _q(",".join(b["functions"]))
+            names = _q(",".join(_block_functions(game, p["block"])))
+            cmd += " --names " + names
+            # the block's twins already matched in our games (or clones here) come first: no compiler guessing
+            if (game.path / "tools" / "clone_match.py").exists():
+                cmd = f"python tools/clone_match.py --other-games --names {names}; " + cmd
         if int(p.get("max") or 0):
             cmd += f" --max {int(p['max'])}"
         if int(p.get("jobs") or 0):

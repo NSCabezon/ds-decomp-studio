@@ -34,6 +34,8 @@ ap.add_argument("--agents", type=int, default=1, help="functions worked on at th
 ap.add_argument("--max", type=int, default=0, help="at most this many functions (0 = all)")
 ap.add_argument("--batch", type=int, default=10, help="matches verified together")
 ap.add_argument("--no-push", action="store_true")
+ap.add_argument("--no-neighbours", action="store_true",
+                help="after a match, do not retry its callers / callees with auto_match (clones are always made)")
 args = ap.parse_args()
 BLOCKS = [b.strip() for b in args.blocks.split(",") if b.strip()]
 _log_lock = threading.Lock()
@@ -258,10 +260,13 @@ def integrate_and_verify(found):
 
 
 def commit(found):
-    names = [f[0] for f in found]
+    commit_names([f[0] for f in found], "qwen")
+
+
+def commit_names(names, how):
     run(["git", "add", "src/auto", f"config/{VERSION}"])
-    msg = f"Match {len(names)} function(s) (qwen, {', '.join(BLOCKS)})\n\n" + "\n".join(names) + \
-        "\n\nCo-Authored-By: Qwen <noreply@qwen.ai>\n"
+    msg = f"Match {len(names)} function(s) ({how}, {', '.join(BLOCKS)})\n\n" + "\n".join(names) + \
+        ("\n\nCo-Authored-By: Qwen <noreply@qwen.ai>\n" if how == "qwen" else "\n")
     run(["git", "commit", "-q", "-m", msg, "--", "src/auto", f"config/{VERSION}"])
     if not args.no_push and run(["git", "remote"]).stdout.strip():
         ok = run(["git", "push", "-q", "origin", "HEAD"]).returncode == 0
@@ -290,18 +295,50 @@ def release_blocks():
         log(f"impossible de rendre les blocs ({e}) : les rendre depuis l'app")
 
 
+def multiply(names: list[str]) -> list[str]:
+    """One AI match is worth more: its clones (same code, or same code with other constants, in this game) are
+    matched without the AI (tools/clone_match.py), then the callers and callees of every new match are retried by
+    auto_match with the real signatures they now have (tools/auto_match.py --neighbours). Each tool verifies the ROM
+    itself. Returns the names they added (committed by the caller)."""
+    added = []
+    if (ROOT / "tools" / "clone_match.py").exists():
+        emit = WORK / "clones.json"
+        emit.unlink(missing_ok=True)
+        r = run([sys.executable, "tools/clone_match.py", "--sources", ",".join(names), "--emit", str(emit)])
+        clones = [tuple(c) for c in json.loads(emit.read_text(encoding="utf-8"))] if emit.exists() else []
+        if clones and integrate_and_verify(clones):  # one verify for all the clones of the batch
+            added += [c[0] for c in clones]
+            log(f"CLONES ({len(clones)}, sans IA) : {', '.join(added)}")
+        elif clones:
+            log(f"{len(clones)} clones compilent mais VERIFY echoue une fois integres (annules)")
+        elif r.returncode:
+            log(f"clone_match a echoue : {(r.stdout + r.stderr).strip().splitlines()[-1:]}")
+    if not args.no_neighbours:
+        before = set(p.stem for p in (ROOT / "src" / "auto").glob("*.c"))
+        r = run([sys.executable, "tools/auto_match.py", "--neighbours", ",".join(names + added)])
+        new = sorted(set(p.stem for p in (ROOT / "src" / "auto").glob("*.c")) - before)
+        if new:
+            log(f"VOISINS rematches par auto_match ({len(new)}) : {', '.join(new)}")
+            added += new
+    return added
+
+
 class Integrator(threading.Thread):
     """Single writer of the project: batches of matches -> verify -> commit. Failing batches are split."""
 
     def __init__(self):
         super().__init__(daemon=True)
-        self.q, self.won, self.lost = queue.Queue(), [], []
+        self.q, self.won, self.lost, self.extra = queue.Queue(), [], [], []
 
     def flush(self, batch):
         if integrate_and_verify(batch):
             commit(batch)
             self.won += batch
             log(f"INTEGRE + VERIFY PASSED : {', '.join(f[0] for f in batch)}")
+            more = multiply([f[0] for f in batch])
+            if more:
+                commit_names(more, "clones + neighbours")
+                self.extra += more
         elif len(batch) > 1:
             log(f"verify echoue sur un lot de {len(batch)} : reessai une par une")
             for f in batch:
@@ -387,7 +424,27 @@ def main():
             src = starting_draft(name)
             if src:
                 todo.append((name, size, addr, src))
-    todo.sort(key=lambda t: t[1])  # smallest first: they match most often
+    # Worth the most matches first (same code in other games + clones here), then smallest first (they match most
+    # often). One function per family of clones: once it matches, clone_match makes the others; the rest of the
+    # family comes after, in case the first one fails.
+    weight, first = {}, {}
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from dsstudio import games as studio_games
+        g = studio_games.Game(ROOT)
+        weight = {r["name"]: studio_games.weight(r) for r in g.functions()}
+        first = {n: row.get("first", n) for n, row in studio_games.clone_families(g).items()}
+    except Exception as e:
+        log(f"(ordre par jumelles indisponible : {e})")
+    seen = set()
+
+    def order(t):
+        rep = first.get(t[0], t[0])
+        later = rep in seen  # another function of the same family comes first
+        seen.add(rep)
+        return (later, -weight.get(t[0], 0), t[1])
+    todo.sort(key=lambda t: t[1])
+    todo.sort(key=order)
     if args.max:
         todo = todo[:args.max]
     if args.agents > 1 and not model_runs_in_parallel(args.model):
@@ -404,6 +461,8 @@ def main():
         name, size, addr, src = item
         if STOP.exists():
             return
+        if any(a <= addr < e for a, e in am.covered_ranges()):
+            return  # matched meanwhile (a clone or a neighbour of an earlier match)
         tried[0] += 1
         work = WORK / f"{name}.c"
         work.write_text(src, encoding="utf-8", newline="\n")
@@ -428,6 +487,7 @@ def main():
     integ.join()
     release_blocks()
     log(f"fini : {len(integ.won)} nouvelles fonctions sur {tried[0]} essayees"
+        + (f", + {len(integ.extra)} sans IA (clones, voisins)" if integ.extra else "")
         + (f" ; rejetees au verify : {', '.join(integ.lost)}" if integ.lost else ""))
 
 

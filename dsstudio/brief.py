@@ -28,6 +28,11 @@ def brief(g, block_id: str) -> str:
         "Functions whose note names an external decompilation (decomps-externes/) are matched automatically:",
         f"`python tools/donor_match.py --names <f1,f2,...>` (or the task \"Reprendre les matchs des autres decomps\").",
         "",
+        "After matching functions, multiply them without any AI before committing:",
+        "`python tools/clone_match.py --other-games --sources <f1,f2,...>` (functions of this game with the same code,",
+        "or the same code with other constants: C copied, renamed, compiled, verified) and",
+        "`python tools/auto_match.py --neighbours <f1,f2,...>` (callers / callees retried with the real signatures).",
+        "",
         "## How to match one function",
         f"1. Assembly: `build/{v}/asm/` (run `ninja dis` if missing). Draft: `build/auto/near/<name>.c`, "
         "`build/drafts/<name>.c`, or `python tools/draft.py <name>`.",
@@ -52,10 +57,18 @@ def brief(g, block_id: str) -> str:
             if p["game"].startswith("donor:"):
                 note = (f"same code in {p['game'][6:]} ({p['name']}, `{p['file']}`): "
                         f"`python tools/donor_match.py --names {f['name']}`")
+            elif p["game"].startswith("clone:"):
+                note = (f"same code as {p['name']} (matched in this game): "
+                        f"`python tools/clone_match.py --names {f['name']}`")
             else:
-                note = f"same code matched in {p['game']}: `{p['file']}` ({p['name']})"
+                note = (f"same code matched in {p['game']}: `{p['file']}` ({p['name']}): "
+                        f"`python tools/clone_match.py --other-games --names {f['name']}`")
         elif f.get("shared", 0) >= 2:
             note = f"SDK, in {f['shared']} other games"
+        if f.get("family"):
+            note = (note + "; " if note else "") + (f"{f['family']} other function(s) of this game have the same code"
+                                                   " (maybe other constants): match this one, `tools/clone_match.py`"
+                                                   " makes them")
         if f.get("module", "main") != "main":
             note = (note + "; " if note else "") + (f"module {f['module']}: delinks in "
                                                    f"config/{v}/arm9/{'overlays/' if f['module'].startswith('ov') else ''}"

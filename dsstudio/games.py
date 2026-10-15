@@ -189,10 +189,13 @@ class Game:
         mods, st = self.modules(), self.auto_status()
         stamp = tuple((f / n).stat().st_mtime if (f / n).exists() else 0 for _m, f in mods
                       for n in ("symbols.txt", "delinks.txt"))
+        fp = self.path / "build" / "clone" / "families.json"
+        stamp += (fp.stat().st_mtime if fp.exists() else 0,)
         key = ("fns", self.id, hash(stamp), id(st))
         if key in _cache:
             return _cache[key]
         shared = shared_counts(FP_KEY.get(self.id))
+        fam = clone_families(self)
         rows = []
         for module, folder in mods:
             ranges = self._ranges_of(folder)
@@ -204,6 +207,7 @@ class Game:
                 rows.append({"name": name, "addr": addr, "size": size, "mode": mode, "module": module,
                              "uid": addr if main else f"{module}:{addr:08x}", "done": f is not None, "file": f,
                              "auto": st.get(name, ""), "shared": shared.get(addr, 0) if main else 0,
+                             "family": family_size(fam.get(name)) if main else 0,
                              "auto_tools": main and mode == "arm"})
         _cache[key] = rows
         return rows
@@ -275,15 +279,45 @@ def donor_hits(game: Game) -> dict:
         return {}
 
 
+def clone_families(game: Game) -> dict:
+    """{function name: {"dup": n, "template": n, "twin": matched twin here or None, "first": representative,
+    "game": [game, function, file] or absent}} written by `tools/clone_match.py --list`: unmatched functions with the
+    same machine code (dup) or the same instructions with other constants (template) as other functions."""
+    p = game.path / "build" / "clone" / "families.json"
+    if not p.exists():
+        return {}
+    try:
+        return _cached(("clone", str(p)), p, lambda: json.loads(p.read_text(encoding="utf-8")))
+    except Exception:
+        return {}
+
+
+def family_size(row) -> int:
+    """How many OTHER unmatched functions of the game one match of this function gives (by cloning)."""
+    return max(row.get("dup", 0), row.get("template", 0)) if row else 0
+
+
+def weight(fn: dict) -> int:
+    """Matches one match of this function is worth beyond itself: other games with the same code + its clones here."""
+    return fn.get("shared", 0) + fn.get("family", 0)
+
+
 def portable(game: Game) -> dict:
     """{addr: (source, function name, source file)} for unmatched functions whose exact twin is already matched
-    elsewhere: in another of our projects (source = game id), or in an external decompilation (source =
-    "donor:<repo>", see donor_hits)."""
+    elsewhere: in another of our projects (source = game id), in this game (source = "clone:<twin>", copied with
+    tools/clone_match.py), or in an external decompilation (source = "donor:<repo>", see donor_hits)."""
     out = dict(_portable_projects(game))
-    hits = donor_hits(game)
-    if hits:
+    hits, fam = donor_hits(game), clone_families(game)
+    if hits or fam:
         for name, addr, _size, _mode in game.symbols():
-            if name in hits and addr not in out:
+            if addr in out:
+                continue
+            row = fam.get(name)
+            if row and isinstance(row.get("game"), list) and len(row["game"]) == 3:
+                out[addr] = tuple(row["game"])
+            elif row and row.get("twin"):
+                out[addr] = ("clone:" + game.id, row["twin"], "src/auto/" + row["twin"] + ".c")
+            elif name in hits:
                 repo, dname, rel = hits[name]
                 out[addr] = ("donor:" + repo, dname, rel)
     return out
