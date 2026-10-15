@@ -119,7 +119,9 @@ def command(jid: str, game, p: dict) -> str:
                 f" --blocks {_q(blocks)} --model {_q(p.get('model') or s['qwen_model'])}"
                 f" --minutes {float(p.get('minutes') or s['qwen_minutes'])}"
                 f" --agents {int(p.get('agents') or s['qwen_agents'])} --max {int(p.get('max') or 0)}"
-                f" --batch {int(p.get('batch') or 10)}")
+                f" --batch {int(p.get('batch') or 10)}"
+                f" --variants {int(p.get('variants') or s['qwen_variants'])}"
+                f" --group {int(p.get('group') or s['qwen_group'])}")
     if jid == "sync_tools":
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools {_q(game.id)}"
     if jid == "sync_all":

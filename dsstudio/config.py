@@ -48,6 +48,8 @@ DEFAULTS = {
     "qwen_model": "qwen9-ctx",
     "qwen_minutes": 5,
     "qwen_agents": 4,                            # functions worked on at once (Ollama needs OLLAMA_NUM_PARALLEL >= this)
+    "qwen_variants": 4,                          # versions asked in one answer, compiled in parallel
+    "qwen_group": 6,                             # small functions sent in one request (1 = never batch)
     "max_parallel_jobs": 2,
     "active_game": "",
     "push_claims": True,                         # claims are pushed to GitHub when the game has a remote

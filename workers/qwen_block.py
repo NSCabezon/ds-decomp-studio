@@ -5,7 +5,12 @@
 
 Generic version of rayman-rr/tools/qwen_auto.py, with several agents at once. Each agent takes the next unmatched
 function that has a starting draft (build/auto/near/, auto_match cache, build/drafts/) and asks the model to
-rewrite it until the project's probe_compiler.py says MATCH. Agents never touch the project: matches go to one
+rewrite it until the project's probe_compiler.py says MATCH. Each request is made to give several tries, because
+reading the prompt is the slow part (qwen3.5 serves one request at a time):
+  - several versions per answer (--variants), all compiled in parallel; the best one is the base of the next request;
+  - small functions (--group-size) go by batches of neighbours (--group) in one request;
+  - big functions (--patch-size / --patch-lines) get SEARCH/REPLACE edits instead of the whole file (less to write).
+Agents never touch the project: matches go to one
 integrator, which adds them in batches (src/auto/ + delinks.txt, clang-format), runs `match.py verify`, and
 commits (+ pushes) only if it passes; a failing batch is retried one function at a time.
 Ollama answers N requests at once only if it was started with OLLAMA_NUM_PARALLEL >= N.
@@ -14,6 +19,7 @@ Create <project>/build/qwen_auto/STOP to stop: agents finish their current funct
 import argparse
 import difflib
 import json
+import os
 import queue
 import re
 import shutil
@@ -33,11 +39,24 @@ ap.add_argument("--minutes", type=float, default=5.0, help="time limit per funct
 ap.add_argument("--agents", type=int, default=1, help="functions worked on at the same time")
 ap.add_argument("--max", type=int, default=0, help="at most this many functions (0 = all)")
 ap.add_argument("--batch", type=int, default=10, help="matches verified together")
+ap.add_argument("--variants", type=int, default=4, help="versions asked in one answer (all compiled in parallel)")
+ap.add_argument("--group", type=int, default=6, help="small functions sent in one request (1 = never batch)")
+ap.add_argument("--group-size", type=int, default=64, help="functions up to this many bytes go by batches")
+ap.add_argument("--group-variants", type=int, default=2, help="versions per function in a batch answer")
+ap.add_argument("--patch-size", type=int, default=400, help="functions from this many bytes get edits, not whole files")
+ap.add_argument("--patch-lines", type=int, default=60, help="... or whose C has this many lines")
+ap.add_argument("--max-tokens", type=int, default=8192, help="cap of one answer")
+ap.add_argument("--compile-jobs", type=int, default=max(2, (os.cpu_count() or 4) // 2), help="compilers at once")
 ap.add_argument("--no-push", action="store_true")
 ap.add_argument("--no-neighbours", action="store_true",
                 help="after a match, do not retry its callers / callees with auto_match (clones are always made)")
 args = ap.parse_args()
 BLOCKS = [b.strip() for b in args.blocks.split(",") if b.strip()]
+for _stream in (sys.stdout, sys.stderr):  # Windows consoles (cp932...) cannot print every message (Ollama errors)
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
 _log_lock = threading.Lock()
 
 ROOT = args.project.resolve()
@@ -49,7 +68,7 @@ STOP = WORK / "STOP"
 LOG = WORK / "log.txt"
 FLAGS = "-O4,p"
 
-SYSTEM = """You fix C code for a matching decompilation (Nintendo DS, Metrowerks mwccarm, ARM, -O4,p).
+RULES = """You fix C code for a matching decompilation (Nintendo DS, Metrowerks mwccarm, ARM, -O4,p).
 You receive a C file and the ARM disassembly of the ORIGINAL function (TARGET) next to the one your code produces
 (CANDIDATE); lines marked * differ. Rewrite the C so that the compiled code becomes identical.
 Allowed changes: loop form (for/while/do-while, *p++ vs index), declaration order, temporaries, types
@@ -58,7 +77,34 @@ Keep the first lines (#define / #include) and the function name. Never make the 
 (the game exports it). ASCII only.
 A short context may come first (which library or part of the game the function is in, what it calls, by real name
 when known): use it to choose meaningful types and variable names, but the target assembly always decides.
-Answer with the COMPLETE new C file in a single ```c code block and nothing else."""
+Never give back a file unchanged: every version must change something.
+"""
+# One request gives several tries: the prompt is read once (qwen3.5 serves one request at a time), the candidates
+# are compiled in parallel.
+FMT_FULL = """Answer with {n} DIFFERENT complete versions of the C file (each one tries another idea), each in its own
+```c code block, and nothing else."""
+# Big functions: only the lines to change, far less text to generate than the whole file
+FMT_PATCH = """Do not rewrite the whole file. Answer with {n} DIFFERENT versions (each one tries another idea). Each version
+starts with a line `### Version <k>` followed by one or more edit blocks:
+<<<<<<< SEARCH
+lines copied exactly from the file
+=======
+the new lines
+>>>>>>> REPLACE
+Example of one version:
+### Version 1
+<<<<<<< SEARCH
+    s32 i = 0;
+    while (i < n) {
+=======
+    s32 i;
+    for (i = 0; i < n; i++) {
+>>>>>>> REPLACE
+Nothing else: no full file, no explanation."""
+# Small functions: several of them in one request
+FMT_GROUP = """You receive several files, one per function, each under a line `### <function name>`. For EACH function,
+answer the line `### <function name>` then {n} DIFFERENT complete versions of its file, each in its own ```c code
+block. Nothing else."""
 
 
 def run(cmd, **kw):
@@ -115,11 +161,12 @@ def starting_draft(name):
 CODE_BLOCK = re.compile(r"```[a-zA-Z]*[ \t]*\n.*?```", re.S)
 
 
-def ask(messages, temp, deadline):
-    """The model's answer, read as it is written and cut as soon as the ```c block is closed: some models go on
-    writing after the code (explanations, a second version...) and would use the whole time of the function."""
+def ask(messages, temp, deadline, blocks=1, num_predict=2048):
+    """The model's answer, read as it is written and cut as soon as `blocks` ```c blocks are closed: some models go on
+    writing after the code (explanations, another version...) and would use the whole time of the function.
+    blocks=0: read until the model stops (patch answers have no fixed number of blocks)."""
     body = json.dumps({"model": args.model, "messages": messages, "stream": True,
-                       "options": {"temperature": temp, "num_predict": 2048}, "think": False}).encode()
+                       "options": {"temperature": temp, "num_predict": num_predict}, "think": False}).encode()
     req = urllib.request.Request("http://127.0.0.1:11434/api/chat", body, {"Content-Type": "application/json"})
     text = []
     with urllib.request.urlopen(req, timeout=max(30, deadline - time.time())) as r:
@@ -130,7 +177,7 @@ def ask(messages, temp, deadline):
             text.append(part.get("message", {}).get("content", ""))
             if part.get("done") or time.time() > deadline:
                 break
-            if "```" in text[-1] and CODE_BLOCK.search("".join(text)):
+            if blocks and "```" in text[-1] and len(CODE_BLOCK.findall("".join(text))) >= blocks:
                 break  # closing the connection stops the generation in Ollama
     return "".join(text)
 
@@ -192,50 +239,200 @@ def _load_codemap():
             CODEMAP = False
 
 
-def chat_loop(work, name, addr, profile, out0):
-    """Asks for a full new file each time, always from the BEST version so far, with the failed attempts listed."""
-    deadline = time.time() + args.minutes * 60
-    best, best_out, best_score = work.read_text(encoding="utf-8"), out0, score(out0)
-    context = code_context(name)
-    context = f"Context (where this code comes from):\n{context}\n\n" if context else ""
-    notes, no_code, attempt = [], 0, 0
-    while time.time() < deadline:
+class Fn:
+    """One function being worked on: its best C so far and what the compiler made of it."""
+
+    def __init__(self, name, size, addr, src):
+        self.name, self.size, self.addr = name, size, addr
+        self.best, self.out, self.score, self.profile = src, "", 10**6, None
+        self.notes, self.context, self.source = [], "", None  # source: the matching C, once found
+
+    @property
+    def patch_mode(self) -> bool:
+        """Big function: ask for edits instead of the whole file."""
+        return self.size >= args.patch_size or self.best.count("\n") >= args.patch_lines
+
+    def message(self, room: int) -> str:
         extra = ("\n\nAlready tried from this file, all worse or equal (do something different):\n" +
-                 "\n".join(notes[-6:])) if notes else ""
-        msgs = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": f"{context}File:\n```c\n{best}```\n\nResult of this file:\n{best_out[-6000:]}{extra}"}]
+                 "\n".join(self.notes[-6:])) if self.notes else ""
+        context = f"Context (where this code comes from):\n{self.context}\n\n" if self.context else ""
+        return f"{context}File:\n```c\n{self.best}```\n\nResult of this file:\n{self.out[-room:]}{extra}"
+
+
+COMPILE_POOL = ThreadPoolExecutor(max_workers=max(1, args.compile_jobs))
+_variant_seq = [0]
+_seq_lock = threading.Lock()
+
+
+def probe_many(cands: list[tuple["Fn", str, str]]) -> list[tuple[bool, str]]:
+    """Compiles [(fn, code, profile)] in parallel (each in its own file): [(match, probe output)]."""
+    def one(c):
+        fn, code, profile = c
+        with _seq_lock:
+            _variant_seq[0] += 1
+            path = WORK / f"{fn.name}.v{_variant_seq[0]}.c"
+        path.write_text(code, encoding="utf-8", newline="\n")
         try:
-            reply = ask(msgs, min(1.0, 0.4 + 0.1 * len(notes)), deadline)
-        except Exception as e:
-            if "timed out" in str(e):
-                log(f"  {name}: limite de temps atteinte pendant une reponse d'Ollama (reponse trop longue, modele en"
-                    " chargement, ou Ollama traite les agents un par un : augmenter les minutes ou OLLAMA_NUM_PARALLEL)")
-            else:
-                log(f"  {name}: Ollama ne repond pas ({e}) : lancez Ollama")
-            return False
-        m = re.search(r"```[a-zA-Z]*\s*\n(.*?)```", reply, re.S)
-        if not m:
-            no_code += 1
-            if no_code >= 3:
-                return False
+            return probe(path, fn.name, fn.addr, profile)
+        finally:
+            path.unlink(missing_ok=True)
+    return list(COMPILE_POOL.map(one, cands))
+
+
+def clean(code: str, name: str) -> str:
+    return unstatic("".join(c for c in code if ord(c) < 128), name)
+
+
+def code_blocks(text: str) -> list[str]:
+    """```c blocks, plus a last block left open (answer cut by the token cap) when its braces are balanced."""
+    out = re.findall(r"```[a-zA-Z]*[ \t]*\n(.*?)```", text, re.S)
+    if text.count("```") % 2:
+        tail = text[text.rindex("```"):].split("\n", 1)
+        if len(tail) == 2 and tail[1].count("{") and tail[1].count("{") == tail[1].count("}"):
+            out.append(tail[1])
+    return out
+
+
+EDIT = re.compile(r"<{5,}\s*SEARCH[ \t]*\n(.*?)\n?={5,}[ \t]*\n(.*?)\n?>{5,}\s*REPLACE", re.S)
+
+
+def apply_edits(text: str, edits: list[tuple[str, str]]) -> str | None:
+    """Applies SEARCH/REPLACE edits; a SEARCH that is not found exactly is looked for line by line ignoring
+    indentation. None if one edit cannot be placed."""
+    for search, replace in edits:
+        if not search.strip():
+            return None
+        if search in text:
+            text = text.replace(search, replace, 1)
             continue
-        code = "".join(c for c in m.group(1) if ord(c) < 128)
-        code = unstatic(code, name)
-        work.write_text(code, encoding="utf-8", newline="\n")
-        attempt += 1
-        ok, out = probe(work, name, addr, profile)
-        s = score(out)
-        log(f"  {name} essai {attempt}: {out.strip().splitlines()[-1][-60:] if out.strip() else '?'} (meilleur {min(s, best_score)})")
-        if ok:
-            return True
-        if s < best_score:
-            best, best_out, best_score, notes = code, out, s, []
+        lines, want = text.split("\n"), [l.strip() for l in search.strip("\n").split("\n")]
+        for i in range(len(lines) - len(want) + 1):
+            if [l.strip() for l in lines[i:i + len(want)]] == want:
+                lines[i:i + len(want)] = replace.split("\n")
+                break
         else:
-            changed = [l[1:] for l in difflib.unified_diff(best.splitlines(), code.splitlines(), lineterm="", n=0)
-                       if l[:1] in "+-" and l[:3] not in ("+++", "---")][:6]
-            notes.append(f"- change {changed} -> score {s}"[:400])
-    work.write_text(best, encoding="utf-8", newline="\n")
-    return False
+            return None
+        text = "\n".join(lines)
+    return text
+
+
+def parse_patches(reply: str, fn: Fn) -> list[str]:
+    """Each `### Version k` of a patch answer applied to the best file."""
+    parts = re.split(r"^#+\s*Version\b.*$", reply, flags=re.M)
+    out = []
+    for part in parts:
+        edits = EDIT.findall(part.replace("```c", "").replace("```", ""))
+        if edits:
+            new = apply_edits(fn.best, edits)
+            if new is not None:
+                out.append(new)
+    return out
+
+
+def parse_group(reply: str, fns: list[Fn]) -> dict[str, list[str]]:
+    """{function: [versions]} from an answer for several functions: by `### name` headers, and for blocks outside
+    them by the function each block defines."""
+    by_name = {f.name: f for f in fns}
+    out = {f.name: [] for f in fns}
+    pieces = re.split(r"^#+\s*`?(\w+)`?\s*$", reply, flags=re.M)
+    loose = pieces[0]
+    for k in range(1, len(pieces) - 1, 2):
+        if pieces[k] in by_name:
+            out[pieces[k]] += code_blocks(pieces[k + 1])
+        else:
+            loose += pieces[k + 1]
+    for block in code_blocks(loose):
+        owner = next((n for n in by_name if re.search(rf"\b{re.escape(n)}\s*\([^;{{}}]*\)\s*\{{", block)), None)
+        if owner:
+            out[owner].append(block)
+    return out
+
+
+def request(fns: list[Fn], temp: float, deadline: float) -> dict[str, list[str]]:
+    """One request to the model for these functions: {function: [candidate C files]}."""
+    v = max(1, args.variants)
+    if len(fns) > 1:
+        n = max(1, args.group_variants)
+        system = RULES + FMT_GROUP.format(n=n)
+        user = "\n\n".join(f"### {f.name}\n{f.message(2500)}" for f in fns)
+        blocks, predict = n * len(fns), sum(n * (len(f.best) // 3 + 150) for f in fns)
+    elif fns[0].patch_mode:
+        # room for the edits, or for one whole file when the model writes that instead
+        system, user, blocks = RULES + FMT_PATCH.format(n=v), fns[0].message(6000), 0
+        predict = max(700 * v, len(fns[0].best) // 3 + 400)
+    else:
+        f = fns[0]
+        system, user = RULES + FMT_FULL.format(n=v), f.message(6000)
+        blocks, predict = v, v * (len(f.best) // 3 + 150)
+    reply = ask([{"role": "system", "content": system}, {"role": "user", "content": user}], temp, deadline,
+                blocks=blocks, num_predict=max(1024, min(args.max_tokens, predict)))
+    try:  # the last raw answer, to see what the model writes when versions go missing
+        (WORK / "last_reply.txt").write_text(reply, encoding="utf-8")
+    except OSError:
+        pass
+    if len(fns) > 1:
+        found = parse_group(reply, fns)
+    elif fns[0].patch_mode:
+        found = {fns[0].name: parse_patches(reply, fns[0])}
+        if not found[fns[0].name]:  # the model wrote whole files anyway
+            found[fns[0].name] = code_blocks(reply)
+    else:
+        found = {fns[0].name: code_blocks(reply)}
+    out = {f.name: list(dict.fromkeys(c for c in (clean(x, f.name) for x in found.get(f.name, []))
+                                      if c.strip() and c.strip() != f.best.strip()))[:max(v, args.group_variants)]
+           for f in fns}
+    raw = sum(len(x) for x in found.values())
+    if raw and not any(out.values()):
+        log(f"  ({raw} version(s) recue(s), toutes identiques au fichier donne)")
+    elif not raw:
+        log(f"  (reponse de {len(reply)} caracteres sans bloc de code reconnu : build/qwen_auto/last_reply.txt)")
+    return out
+
+
+def solve(unit: list[Fn]) -> None:
+    """Works on one function or a batch of small ones until each matches or the time is out (minutes per function).
+    Each request asks for several versions; every version is compiled, the best one becomes the new base."""
+    deadline = time.time() + args.minutes * 60 * len(unit)
+    pending, empty, rnd = list(unit), 0, 0
+    while pending and time.time() < deadline and not STOP.exists():
+        rnd += 1
+        temp = min(1.0, 0.5 + 0.05 * max(len(f.notes) for f in pending))
+        try:
+            cands = request(pending, temp, deadline)
+        except Exception as e:
+            if isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError) \
+                    or "timed out" in str(e) or "10060" in str(e):  # 10060: Windows timeout, message translated
+                log(f"  {', '.join(f.name for f in pending)}: limite de temps atteinte pendant une reponse d'Ollama")
+            else:
+                log(f"  Ollama ne repond pas ({e}) : lancez Ollama")
+            return
+        todo = [(f, c, f.profile) for f in pending for c in cands.get(f.name, [])]
+        if not todo:
+            empty += 1
+            log(f"  reponse sans code utilisable ({empty}/3)")
+            if empty >= 3:
+                return
+            continue
+        empty = 0
+        results = probe_many(todo)
+        for f in list(pending):
+            mine = [(score(out), ok, code, out) for (g, code, _p), (ok, out) in zip(todo, results) if g is f]
+            if not mine:
+                continue
+            s, ok, code, out = min(mine, key=lambda r: r[0])
+            log(f"  {f.name} tour {rnd}: {len(mine)} versions, meilleure {out.strip().splitlines()[-1][-50:] if out.strip() else '?'}"
+                f" (avant {f.score})")
+            if ok:
+                f.source = code
+                pending.remove(f)
+                continue
+            for s2, _ok, c2, _o in mine:
+                if s2 >= f.score:
+                    changed = [l[1:] for l in difflib.unified_diff(f.best.splitlines(), c2.splitlines(), lineterm="", n=0)
+                               if l[:1] in "+-" and l[:3] not in ("+++", "---")][:6]
+                    f.notes.append(f"- change {changed} -> score {s2}"[:400])
+            if s < f.score:
+                f.best, f.out, f.score, f.notes = code, out, s, []
 
 
 def integrate_and_verify(found):
@@ -451,36 +648,62 @@ def main():
         # several agents would only queue behind each other, each one getting a fraction of its time limit
         log(f"le modele {args.model} ne repond qu'a une requete a la fois dans Ollama : 1 agent au lieu de {args.agents}")
         args.agents = 1
-    log(f"{len(todo)} fonctions avec brouillon, {args.agents} agent(s), modele {args.model}, blocs {', '.join(BLOCKS)}")
+    # Small functions go by batches of neighbours of similar size (same module of the SDK / engine most of the time):
+    # one request for several of them. Each batch starts where the queue order puts its first function.
+    units, used = [], set()
+    small = [t for t in todo if t[1] <= args.group_size] if args.group > 1 else []
+    for t in todo:
+        if t[0] in used:
+            continue
+        unit = [t]
+        if t in small:
+            near = sorted((u for u in small if u[0] not in used and u is not t),
+                          key=lambda u: (abs(u[2] - t[2]) // 0x400, abs(u[1] - t[1]), abs(u[2] - t[2])))
+            unit += near[:args.group - 1]
+        used.update(u[0] for u in unit)
+        units.append(unit)
+    log(f"{len(todo)} fonctions avec brouillon en {len(units)} requetes de depart, {args.agents} agent(s), modele "
+        f"{args.model}, {args.variants} versions par reponse, blocs {', '.join(BLOCKS)}")
     STOP.unlink(missing_ok=True)
     integ = Integrator()
     integ.start()
     tried = [0]
 
-    def agent(item):
-        name, size, addr, src = item
+    def agent(unit):
         if STOP.exists():
             return
-        if any(a <= addr < e for a, e in am.covered_ranges()):
-            return  # matched meanwhile (a clone or a neighbour of an earlier match)
-        tried[0] += 1
-        work = WORK / f"{name}.c"
-        work.write_text(src, encoding="utf-8", newline="\n")
-        results = [(score(o), p, o) for p in profiles for _, o in [probe(work, name, addr, p)]]
-        s0, profile, out0 = min(results, key=lambda r: r[0])
-        log(f"{name} ({size} octets, {profile}) : depart {s0} instructions differentes")
+        covered = am.covered_ranges()
+        fns = [Fn(*t) for t in unit if not any(a <= t[2] < e for a, e in covered)]  # matched meanwhile: skip
+        if not fns:
+            return
+        tried[0] += len(fns)
+        starts = probe_many([(f, f.best, p) for f in fns for p in profiles])
+        for i, f in enumerate(fns):
+            mine = [(score(out), p, out) for p, (_ok, out) in zip(profiles, starts[i * len(profiles):(i + 1) * len(profiles)])]
+            f.score, f.profile, f.out = min(mine, key=lambda r: r[0])
+            f.context = code_context(f.name)
+            if f.score == 0:
+                f.source = f.best
+            log(f"{f.name} ({f.size} octets, {f.profile}) : depart {f.score} instructions differentes"
+                + (" [edits]" if f.patch_mode and len(fns) == 1 else ""))
+        if len(fns) > 1:
+            log(f"lot de {len(fns)} petites fonctions : {', '.join(f.name for f in fns)}")
         t0 = time.time()
-        if s0 == 0 or chat_loop(work, name, addr, profile, out0):
-            source = work.read_text(encoding="utf-8")
-            if profile != profiles[0] and not source.startswith(am.MARKER):
-                source = f"{am.MARKER}{profile} */\n" + source
-            log(f"{name}: MATCH en {time.time() - t0:.0f}s -> file d'integration")
-            integ.q.put((name, size, addr, source))
-        else:
-            log(f"{name}: pas de match ({time.time() - t0:.0f}s)")
+        rest = [f for f in fns if f.source is None]
+        if rest:
+            solve(rest)
+        for f in fns:
+            if f.source is None:
+                log(f"{f.name}: pas de match ({time.time() - t0:.0f}s)")
+                continue
+            source = f.source
+            if f.profile != profiles[0] and not source.startswith(am.MARKER):
+                source = f"{am.MARKER}{f.profile} */\n" + source
+            log(f"{f.name}: MATCH en {time.time() - t0:.0f}s -> file d'integration")
+            integ.q.put((f.name, f.size, f.addr, source))
 
     with ThreadPoolExecutor(max_workers=max(1, args.agents)) as ex:
-        list(ex.map(agent, todo))
+        list(ex.map(agent, units))
     if STOP.exists():
         log("fichier STOP trouve : arret apres les fonctions en cours.")
     integ.q.put(None)

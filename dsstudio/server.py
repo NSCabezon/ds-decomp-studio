@@ -169,7 +169,8 @@ class H(BaseHTTPRequestHandler):
                         taken.append(bid)
                 if not taken:
                     return self.send({"error": "aucun bloc n'a pu etre pris"})
-                params = {k: d[k] for k in ("agents", "minutes", "max", "model", "batch") if d.get(k) not in (None, "")}
+                params = {k: d[k] for k in ("agents", "minutes", "max", "model", "batch", "variants", "group")
+                          if d.get(k) not in (None, "")}
                 params["blocks"] = taken
                 return self.send({**jobs.submit("qwen", g.id, params, s["who"]), "blocks": taken})
             if p == "release":

@@ -217,7 +217,7 @@ function qwenDialog(ids) {
   window.QWEN_IDS = ids;
   const s = O.settings, free = G.blocks.filter(b => (b.state === "free" || b.state === "expired") && (fLevel === null || b.level === fLevel)).length;
   modal(`<h2>Agents Qwen ${ids ? "sur " + esc(ids.join(", ")) : "sur plusieurs blocs"}</h2>
-    <p class="hint">Chaque agent travaille sur une fonction a la fois. Les matches sont verifies par lots (verify complet) puis commites.
+    <p class="hint">Chaque requete donne plusieurs essais : plusieurs versions par reponse, les petites fonctions par lots, et seulement les lignes a changer (SEARCH/REPLACE) pour les grosses. Les matches sont verifies par lots (verify complet) puis commites.
     Pour que les agents tournent vraiment en meme temps, Ollama doit etre lance avec <code>OLLAMA_NUM_PARALLEL</code> au moins egal au nombre d'agents (voir Reglages).</p>
     <table>${ids ? "" : `<tr><td>Niveau</td><td><select data-k="level"><option value="">le plus facile d'abord</option>${O.levels.map(l => `<option value="${l.n}" ${fLevel === l.n ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></td></tr>
       ${optField(["count", `Nombre de blocs a donner a Qwen (${free} libres ici)`, "number", Math.min(4, Math.max(free, 1))])}`}
@@ -225,6 +225,8 @@ function qwenDialog(ids) {
       ${optField(["minutes", "Minutes max par fonction", "number", s.qwen_minutes])}
       ${optField(["max", "Nombre max de fonctions (0 = toutes)", "number", 0])}
       ${optField(["batch", "Matches verifies ensemble", "number", 10])}
+      ${optField(["variants", "Versions demandees par reponse (toutes compilees en parallele)", "number", s.qwen_variants])}
+      ${optField(["group", "Petites fonctions (64 octets max) envoyees ensemble (1 = une par requete)", "number", s.qwen_group])}
       <tr><td>Modele</td><td><input data-k="model" value="${esc(s.qwen_model)}"></td></tr></table>
     <div class="btns" style="margin-top:12px"><button class="btn" onclick="launchQwen()">Lancer les agents</button>
     <button class="btn sec" onclick="closeModal()">Annuler</button></div>`);
