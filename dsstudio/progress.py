@@ -1,5 +1,6 @@
 """Publishes the progress: the "Progress" section of every published game's README (tools/match.py progress), then
-the table of every game in the Studio's README (readme.py), each committed and pushed.
+the table of every game in the Studio's README (readme.py), each committed and pushed. Games registered on
+ByteMatch (an upload token in data/bytematch.json, see bytematch.py) also get its badges and their report uploaded.
 
     python studio.py progress                 # every game that has a GitHub repo, then the Studio
     python studio.py progress --game rayman-rr --no-push
@@ -12,7 +13,7 @@ import re
 import subprocess
 import sys
 
-from . import config, games, gitutil, readme
+from . import bytematch, config, games, gitutil, readme
 
 MSG = "README: progress section (tools/match.py progress)\n\nUpdated by DS Decomp Studio (job progress)."
 
@@ -72,7 +73,11 @@ def run(game_id: str = "", push: bool = True, log=print) -> None:
             continue
         log("  " + r.stdout.strip().splitlines()[-1])
         fix_title(g)
+        if bytematch.repo_of(g) in bytematch.tokens():
+            bytematch.add_badges(g)
         commit_push(g.path, ["README.md"], MSG + "\n", push, log)
+        if push:
+            bytematch.upload(g, log)  # for the commit now on GitHub; nothing without a token
     log(f"[{len(todo) + 1}/{len(todo) + 1}] DS Decomp Studio")
     readme.update()
     commit_push(config.STUDIO, ["README.md"], "README: progress of every game (job progress)\n", push, log)

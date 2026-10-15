@@ -12,6 +12,7 @@
     python studio.py rebuild <game>           recompute the blocks (claimed blocks are kept)
     python studio.py queue                    who works on what, every game
     python studio.py readme                  table of every game (progress, ROM, repo) in README.md
+    python studio.py bytematch <game> [--token bm_...]   ByteMatch: save the upload token / upload the report
     python studio.py progress [--game G] [--no-push]   progress in the README of every published game + Studio, pushed
     python studio.py sync-tools [<game>] [--no-push]  latest tools of rayman-rr (auto_match...) into one or every game
     python studio.py publish <game> [--private] [--yes]
@@ -53,6 +54,8 @@ def main():
     s = sub.add_parser("progress", help="progress of every published game in its README, then the Studio's table, pushed")
     s.add_argument("--game", default="")
     s.add_argument("--no-push", action="store_true")
+    s = sub.add_parser("bytematch", help="ByteMatch: remember a game's upload token (--token), else upload its report now")
+    s.add_argument("game"); s.add_argument("--token", default="")
     s = sub.add_parser("publish"); s.add_argument("game"); s.add_argument("--private", action="store_true")
     s.add_argument("--yes", action="store_true")
     a = ap.parse_args()
@@ -101,6 +104,13 @@ def main():
         from dsstudio import readme
         readme.update()
         print("README.md: table of every game updated")
+    elif a.cmd == "bytematch":
+        from dsstudio import bytematch
+        g = games.get(a.game)
+        if a.token:
+            print(f"jeton ByteMatch enregistre pour {bytematch.set_token(g, a.token)} (data/bytematch.json)")
+        else:
+            bytematch.upload(g)
     elif a.cmd == "publish":
         g = games.get(a.game)
         if not a.yes:
