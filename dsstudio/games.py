@@ -48,9 +48,7 @@ STUDIOS = {  # who made the game: games of one studio often share an engine
     "powerpuff-girls-z": "Bandai Namco", "star-wars-lethal-alliance": "Ubisoft",
 }
 # ROM rebuild state seen during onboarding; `verify` jobs update data/health.json, which wins
-KNOWN_BROKEN = {"spore-creatures": "ROM reconstruit different", "club-house-games": "delink impossible (dsd)",
-                "tom-and-jerry-tales": "ROM reconstruit plus grand", "star-wars-lethal-alliance": "ninja echoue",
-                "professor-layton-and-the-spectre-s-call": "ninja echoue"}
+KNOWN_BROKEN = {}  # all fixed 2026-10-15: gametools rom_build.py (banner icon, DSProtect, empty files), delink_fix.py
 
 _cache: dict = {}
 
@@ -119,6 +117,13 @@ class Game:
 
     def rom_state(self) -> dict:
         if not self.ready:
+            rom = next((self.path / "extract").glob("baserom*.nds"), None)
+            try:
+                dsi = rom is not None and rom.open("rb").read(0x13)[0x12] & 0x02
+            except OSError:
+                dsi = False
+            if dsi:
+                return {"ok": False, "note": "ROM DSi (NDSi Enhanced) : dsd 0.12 ne sait pas l'extraire"}
             return {"ok": False, "note": "projet incomplet (dsd init a echoue)"}
         h = health().get(self.id)
         if h:

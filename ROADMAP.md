@@ -28,7 +28,8 @@ un outil ou une couche faite pour Rayman doit servir tel quel au jeu suivant.
 | `dsd init` + `new_project.py` | ✅ | — |
 | `reloc_fixes.py` (faux pointeurs de dsd) | ✅ | généraliser la détection automatique |
 | `find_culprits.py` | ✅ | — |
-| Réparer les 5 jeux KO (Spore, Club House, Tom & Jerry, Layton, SW Lethal Alliance) | 🔴 | outil de bissection : comparer module par module, puis section par section, pour isoler ce que dsd recompose mal |
+| Réparer les jeux KO | ✅ 5 réparés le 2026-10-15 : `gametools/rom_build.py` (lancé par ninja à la place de `dsd rom build`) remet les index de palette de l'icône quand la palette a deux fois la même couleur (Spore, SW Lethal Alliance), redonne à dsd les octets chiffrés d'origine des overlays DSProtect inchangés (Layton), remet l'adresse d'origine des fichiers vides (Tom & Jerry) ; `delink_fix.py` applique les suggestions de `dsd delink` pour les pointeurs Thumb (Club House) ; `romdiff.py` dit où une ROM diffère (en-tête, bannière, FAT, fichier par fichier). Fausses fonctions Thumb dans des tables de données (Tom & Jerry, Club House ov309) : le linker ajoute des veneers `$Ven$$` → déclarer la zone en donnée dans symbols.txt (à automatiser) |
+| ROM DSi (« NDSi Enhanced » : Shrek, Pingouins de Madagascar) | 🔴 dsd 0.12 ne gère pas le format TWL (pas de pied ARM9, entrées d'autoload du SDK 5 de 16 octets) : à ajouter dans dsd (Rust) |
 
 **Critère de sortie** : `VERIFY PASSED` sur le jeu. Rayman : ✅.
 
