@@ -64,8 +64,11 @@ def run(game_id: str = "", push: bool = True, log=print) -> None:
         if who:
             log(f"  saute : {who} travaille sur ce jeu")
             continue
-        subprocess.run([sys.executable, "tools/configure.py", g.version], cwd=g.path, capture_output=True)
-        r = subprocess.run([sys.executable, "tools/match.py", "progress", "--rebuild"], cwd=g.path,
+        # the README needs no build (match.py reads the configuration); ByteMatch needs objdiff's report
+        rebuild = ["--rebuild"] if bytematch.repo_of(g) in bytematch.tokens() else []
+        if rebuild:
+            subprocess.run([sys.executable, "tools/configure.py", g.version], cwd=g.path, capture_output=True)
+        r = subprocess.run([sys.executable, "tools/match.py", "progress", *rebuild], cwd=g.path,
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode:
             log("  echec : " + (r.stdout + r.stderr).strip().splitlines()[-1][:300] if (r.stdout + r.stderr).strip()
