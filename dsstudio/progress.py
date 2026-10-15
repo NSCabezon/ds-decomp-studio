@@ -43,7 +43,13 @@ def fix_title(g) -> None:
 
 def commit_push(repo, paths, message, push=True, log=print) -> None:
     if not gitutil.git(repo, "status", "--porcelain", "--", *paths).stdout.strip():
-        log("  inchange")
+        ahead = gitutil.git(repo, "rev-list", "--count", "@{u}..HEAD").stdout.strip()
+        if push and ahead not in ("", "0") and gitutil.has_remote(repo):
+            # README unchanged, but commits wait (matches, tools): they are part of the progress
+            r = gitutil.git(repo, "push", "-q", "origin", "HEAD", timeout=300)
+            log(f"  inchange, {ahead} commit(s) pousse(s)" if r.returncode == 0 else "  push rate : " + r.stderr.strip()[-300:])
+        else:
+            log("  inchange")
         return
     r = gitutil.git(repo, "commit", "-q", "-m", message, "--", *paths)
     if r.returncode:
