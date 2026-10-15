@@ -82,6 +82,8 @@ function viewGames() {
     <div class="kpi"><b>${live}</b><span>blocs en cours</span></div></div>`;
   const behind = gs.filter(g => g.tools_behind && g.tools_behind.length).length;
   h += `<div class="card"><h3>Mes jeux</h3><p class="hint">Clique sur un jeu pour travailler dessus. "Retirer" le range dans projets/_archive (rien n'est supprime).</p>
+  <div class="btns" style="margin-bottom:8px"><button class="btn small" title="${esc(JD('progress').desc)}" onclick="api('run',{id:'progress'}).then(r=>r.n&&toast('Publication de l'avancement lancee (onglet Queue)'))">Publier l'avancement sur GitHub</button>
+    <span class="hint">README de chaque jeu publie + tableau de tous les jeux dans ds-decomp-studio</span></div>
   ${behind ? `<div class="btns" style="margin-bottom:8px"><span class="tag ko">${behind} jeux ont des outils en retard sur rayman-rr (auto_match...)</span>
     <button class="btn small" onclick="api('run',{id:'sync_all'}).then(r=>r.n&&toast('Mise a jour des outils lancee (onglet Queue)'))">Tout mettre a jour</button></div>` : ""}
   <div class="btns" style="margin-bottom:8px"><span class="hint">Trier par</span>
@@ -151,7 +153,7 @@ async function viewGame() {
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions${g.modules > 1 ? ` (${g.modules} modules, principal ${g.pct_main.toFixed(2)} %)` : ""}</div>
     ${g.left_manual ? `<div class="hint" style="text-align:right"><a href="#game" onclick="sub='functions';fnKind='manual';render();return false">${fmt(g.left_manual)} a faire a la main</a> (Thumb, overlays, ITCM : pas d'outil auto)</div>` : ""}</div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
-    ${["moulinette", "auto", "donors", "names", "regroup", "cleanup", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
+    ${["moulinette", "auto", "donors", "names", "regroup", "cleanup", "progress", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
     ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
@@ -331,7 +333,7 @@ async function runJob(id, params) {
       <button class="btn sec" onclick="closeModal()">Annuler</button></div>`);
     return;
   }
-  params = params || {};
+  params = params || (id === "progress" ? {game: game()} : {});  // from a game's page: only that game
   let r = await api("run", {id, game: game(), params});
   if (r.error && r.error.includes("forcer") && confirm("Auto-match deja termine sur ce jeu. Relancer quand meme ?")) r = await api("run", {id, game: game(), params: {...params, force: true}});
   if (r.n) toast(`Tache #${r.n} ajoutee a la queue`);

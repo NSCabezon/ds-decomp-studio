@@ -24,7 +24,8 @@ def table() -> str:
     published = sum(1 for r in rows if r["remote"])
     lines = [START,
              f"{len(rows)} jeux, {published} publiés · {total_ok}/{total_fn} fonctions matchées au total "
-             f"· mis à jour le {datetime.date.today().isoformat()} (`python studio.py readme`)",
+             f"· mis à jour le {datetime.date.today().isoformat()} par le bouton « Publier l'avancement sur GitHub » "
+             f"(onglet Jeux) ou `python studio.py progress`",
              "",
              "| Jeu | Version | Studio | Code matché | Fonctions | ROM | Dépôt |",
              "|---|---|---|---|---|---|---|"]

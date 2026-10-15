@@ -44,6 +44,9 @@ DEFS = {
                 "chaque fusion compilee et comparee, puis la ROM"),
     "cleanup": ("Nettoyer le C de m2c", "game", 600,
                 "retire les notes de m2c (/* extern */...), lignes vides, clang-format ; la ROM est reconstruite"),
+    "progress": ("Publier l'avancement", "global", 900,
+                 "met a jour la section Progress du README de chaque jeu publie (match.py progress) et le tableau "
+                 "de tous les jeux du README du Studio, puis commit + push"),
     "new_project": ("Ajouter un jeu", "global", 600, "dsd init + build depuis une ROM de roms/"),
     "publish": ("Publier sur GitHub", "game", 180, "cree le repo public et pousse"),
 }
@@ -132,6 +135,9 @@ def command(jid: str, game, p: dict) -> str:
         return "python tools/donors.py index"
     if jid in ("names", "regroup", "cleanup"):
         return f"python tools/{jid}.py" + (" --dry-run" if p.get("dry_run") else "")
+    if jid == "progress":
+        return (f"python {_q((config.STUDIO / 'studio.py').as_posix())} progress"
+                + (f" --game {_q(p['game'])}" if p.get("game") else "") + (" --no-push" if p.get("no_push") else ""))
     if jid == "scan":
         return "python tools/fingerprint.py scan projets/_analyse/*"
     if jid == "new_project":

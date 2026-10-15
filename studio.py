@@ -12,6 +12,7 @@
     python studio.py rebuild <game>           recompute the blocks (claimed blocks are kept)
     python studio.py queue                    who works on what, every game
     python studio.py readme                  table of every game (progress, ROM, repo) in README.md
+    python studio.py progress [--game G] [--no-push]   progress in the README of every published game + Studio, pushed
     python studio.py sync-tools [<game>] [--no-push]  latest tools of rayman-rr (auto_match...) into one or every game
     python studio.py publish <game> [--private] [--yes]
 """
@@ -49,6 +50,9 @@ def main():
     s = sub.add_parser("sync-tools"); s.add_argument("game", nargs="?")
     s.add_argument("--no-push", action="store_true", help="commit in each game but do not push")
     sub.add_parser("readme", help="update the table of every game in README.md")
+    s = sub.add_parser("progress", help="progress of every published game in its README, then the Studio's table, pushed")
+    s.add_argument("--game", default="")
+    s.add_argument("--no-push", action="store_true")
     s = sub.add_parser("publish"); s.add_argument("game"); s.add_argument("--private", action="store_true")
     s.add_argument("--yes", action="store_true")
     a = ap.parse_args()
@@ -90,6 +94,9 @@ def main():
             r = toolsync.sync(g, push=not a.no_push)
             print(f"{g.id}: " + (r.get("error") or (", ".join(r["changed"]) + " mis a jour" if r["changed"] else "a jour"))
                   + (f" ({r['warning']})" if r.get("warning") else ""))
+    elif a.cmd == "progress":
+        from dsstudio import progress
+        progress.run(a.game, push=not a.no_push)
     elif a.cmd == "readme":
         from dsstudio import readme
         readme.update()

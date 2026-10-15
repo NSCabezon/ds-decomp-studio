@@ -10,7 +10,7 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 ## Avancement des jeux
 
 <!-- games:start -->
-32 jeux, 21 publiés · 36510/232419 fonctions matchées au total · mis à jour le 2026-10-15 (`python studio.py readme`)
+32 jeux, 21 publiés · 36510/232419 fonctions matchées au total · mis à jour le 2026-10-15 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
 
 | Jeu | Version | Studio | Code matché | Fonctions | ROM | Dépôt |
 |---|---|---|---|---|---|---|
