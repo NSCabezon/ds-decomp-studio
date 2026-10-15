@@ -300,11 +300,45 @@ class Integrator(threading.Thread):
                 pending = []
 
 
+def ollama_up() -> bool:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def ensure_ollama(wait: float = 90) -> bool:
+    """Starts Ollama when it is not running (the Windows app, else `ollama serve`) and waits until it answers."""
+    if ollama_up():
+        return True
+    import os
+    app = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama app.exe")
+    exe = shutil.which("ollama") or os.path.join(os.path.dirname(app), "ollama.exe")
+    cmd = [app] if os.path.exists(app) else [exe, "serve"] if os.path.exists(exe) else None
+    if cmd is None:
+        log("Ollama n'est pas installe (https://ollama.com) : impossible de lancer Qwen")
+        return False
+    log("Ollama ne tourne pas : demarrage...")
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=0x00000008 | 0x00000200 if os.name == "nt" else 0)  # detached: outlives this run
+    end = time.time() + wait
+    while time.time() < end:
+        if ollama_up():
+            log("Ollama pret")
+            return True
+        time.sleep(1)
+    log("Ollama ne repond toujours pas : lancez-le a la main (application Ollama)")
+    return False
+
+
 def main():
     blocks = {b["id"]: b for b in json.loads((ROOT / ".studio" / "blocks.json").read_text(encoding="utf-8"))["blocks"]}
     missing = [b for b in BLOCKS if b not in blocks]
     if missing:
         sys.exit(f"blocs introuvables dans .studio/blocks.json : {missing}")
+    if not ensure_ollama():
+        sys.exit(1)
     import auto_match as am
     syms = {}
     for line in am.SYMBOLS.read_text(encoding="utf-8").splitlines():
