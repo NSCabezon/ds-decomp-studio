@@ -592,6 +592,23 @@ def integrate_verified(found: list[tuple[str, int, int, str]], log=print) -> lis
     return [p.stem for p in created]
 
 
+def commit(names: list[str], push: bool) -> None:
+    """Commits exactly what this run added (sources, delinks.txt, compilers.txt), never anything else."""
+    files = [f"src/auto/{n}.c" for n in names if (ROOT / "src" / "auto" / f"{n}.c").exists()]
+    cfg = [p.relative_to(ROOT).as_posix() for p in (am.DELINKS, am.COMPILERS_TXT) if p.exists()]
+    run(["git", "add", "--", *files, *cfg])
+    msg = (f"clone_match: {len(names)} matching functions\n\nFunctions with the same code as functions already "
+           "matched in this game or in another of our DS projects (tools/clone_match.py). VERIFY PASSED.\n")
+    r = run(["git", "commit", "-q", "-m", msg, "--", *files, *cfg])
+    if r.returncode:
+        print(f"commit failed: {(r.stdout + r.stderr).strip()[-300:]}")
+        return
+    print("committed")
+    if push and run(["git", "remote"]).stdout.strip():
+        r = run(["git", "push", "-q", "origin", "HEAD"])
+        print("pushed" if r.returncode == 0 else f"push failed: {(r.stdout + r.stderr).strip()[-300:]}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="only write build/clone/families.json")
@@ -602,6 +619,8 @@ def main():
     ap.add_argument("--max", type=int, default=0, help="integrate at most N matches")
     ap.add_argument("-j", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--report", type=Path, help="write the names integrated to this file (one per line)")
+    ap.add_argument("--commit", action="store_true", help="after VERIFY PASSED: commit the new files (and only them)")
+    ap.add_argument("--push", action="store_true", help="with --commit: push when the game has a remote")
     ap.add_argument("--emit", type=Path, help="change nothing: write the matches found to this JSON file "
                                               "([name, size, addr, source]...) for a caller that integrates them")
     args = ap.parse_args()
@@ -638,6 +657,8 @@ def main():
     if args.report:
         args.report.write_text("".join(k + "\n" for k in kept), encoding="utf-8")
     print(f"OK: {len(kept)} functions matched by cloning.")
+    if kept and args.commit:
+        commit(kept, args.push)
     write_families(Image(ROOT), others or other_images())  # the Studio's levels and queue order read it
 
 

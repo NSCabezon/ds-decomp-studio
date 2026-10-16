@@ -38,7 +38,7 @@ DEFS = {
               "fonctions au code identique (ou aux constantes pres) a une fonction deja matchee, ici ou dans un autre "
               "de nos jeux : C copie + renomme, compile + compare, puis verify"),
     "clone_all": ("Cloner les jumelles dans tous les jeux", "global", 7200,
-                  "le clonage dans chaque jeu (1 match dans un jeu = 1 match dans chaque jeu qui a la meme fonction)"),
+                  "le clonage dans chaque jeu (1 match dans un jeu = 1 match dans chaque jeu qui a la meme fonction), verify, puis commit + push des jeux qui passent"),
     "dataset": ("Exporter le jeu de donnees (LoRA)", "global", 120,
                 "paires assembleur -> C exact de tous les jeux, au format d'entrainement (datasets/*.jsonl)"),
     "examples": ("Indexer les exemples pour l'IA", "global", 400,
@@ -153,7 +153,7 @@ def command(jid: str, game, p: dict) -> str:
         # one game after the other; a game busy with another pipeline is skipped (its lock), the others go on
         dirs = " ".join(_q(f"projets/{g.id}") for g in games.all_games() if g.ready)
         return (f"for d in {dirs}; do [ -f \"$d/tools/clone_match.py\" ] || continue; echo \"== $d\"; "
-                f"(cd \"$d\" && python tools/clone_match.py --other-games); done")
+                f"(cd \"$d\" && python tools/clone_match.py --other-games --commit --push); done")
     if jid == "donors":
         # by block (the functions of one block), by batch (--max N matches), or only the list of candidates
         cmd = "python tools/donor_match.py"
