@@ -1,10 +1,13 @@
 """ByteMatch (https://bytematch.dev): public progress pages and badges of decompilation projects, fed by objdiff
 reports.
 
-The game repos cannot build their report in GitHub's CI (it needs the ROM), so the Studio uploads the report it
-builds locally (build/<version>/report.json, made by `tools/match.py progress --rebuild`) through ByteMatch's upload
-API, for the commit that is on GitHub. One upload token per project, created on its ByteMatch manage page, kept in
-data/bytematch.json (data/ is never committed):
+The game repos cannot build their report in GitHub's CI (it needs the ROM). Two ways to feed ByteMatch:
+
+1. Automatic (no token): the Studio commits the report it builds locally (build/<version>/report.json, made by
+   `tools/match.py progress --rebuild`) as progress/report.json.gz, and the game's workflow
+   .github/workflows/progress.yaml publishes it as the artifact `<VERSION>_report`, the way dtk-template projects
+   do. Adding the repo once on https://bytematch.dev/manage/new is then enough: ByteMatch reads every new report.
+2. Upload API: one token per project (its ByteMatch manage page), kept in data/bytematch.json (never committed):
 
     python studio.py bytematch rayman-rr --token bm_...    # remember the token (once)
     python studio.py bytematch rayman-rr                   # upload now (the job `progress` does it too)
@@ -50,6 +53,82 @@ def set_token(g, token: str) -> str:
 def version_of(g) -> str:
     """The version name shown on ByteMatch: the game code of the ROM (AR5E), else the config folder (usa)."""
     return g.code or g.version
+
+
+MANAGE_NEW = f"{SITE}/manage/new"
+WORKFLOW = ".github/workflows/progress.yaml"
+REPORT = "progress/report.json.gz"
+
+
+def workflow_text(g) -> str:
+    """The game's workflow that publishes the committed report as the artifact ByteMatch reads."""
+    v = version_of(g)
+    return f"""# Written by DS Decomp Studio: publishes the objdiff report for ByteMatch (https://bytematch.dev).
+# The report needs the ROM to be built, so the Studio builds it locally and commits it as {REPORT};
+# this workflow only unpacks it into the artifact ByteMatch expects: <VERSION>_report.
+name: Progress report
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+jobs:
+  report:
+    name: Publish the objdiff report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Unpack the report built by DS Decomp Studio
+        run: |
+          mkdir -p out
+          if [ -f {REPORT} ]; then gunzip -c {REPORT} > out/report.json; fi
+
+      - name: Upload the report
+        if: hashFiles('out/report.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: {v}_report
+          path: out/report.json
+"""
+
+
+def export(g) -> list[str]:
+    """Writes progress/report.json.gz (from build/<version>/report.json) and the workflow. Returns the paths that
+    changed (to commit), [] when there is no report yet."""
+    src = g.path / "build" / g.version / "report.json"
+    if not src.exists():
+        return []
+    changed = []
+    out = g.path / REPORT
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = gzip.compress(src.read_bytes(), compresslevel=9, mtime=0)  # mtime 0: same report, same bytes
+    if not out.exists() or out.read_bytes() != data:
+        out.write_bytes(data)
+        changed.append(REPORT)
+    wf = g.path / WORKFLOW
+    text = workflow_text(g)
+    if not wf.exists() or wf.read_text(encoding="utf-8") != text:
+        wf.parent.mkdir(parents=True, exist_ok=True)
+        wf.write_text(text, encoding="utf-8", newline="\n")
+        changed.append(WORKFLOW)
+    return changed
+
+
+def registered(g) -> bool:
+    """The project exists on ByteMatch (its badge answers): only then are badges added to the README."""
+    repo = repo_of(g)
+    if not repo:
+        return False
+    if repo in tokens():
+        return True
+    req = urllib.request.Request(f"{SITE}/{repo}.svg?label=Code&measure=matched_code_percent",
+                                 headers={"User-Agent": "ds-decomp-studio (+https://github.com/liolu/ds-decomp-studio)"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def badges(g) -> str:

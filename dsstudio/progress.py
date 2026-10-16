@@ -1,6 +1,8 @@
 """Publishes the progress: the "Progress" section of every published game's README (tools/match.py progress), then
-the table of every game in the Studio's README (readme.py), each committed and pushed. Games registered on
-ByteMatch (an upload token in data/bytematch.json, see bytematch.py) also get its badges and their report uploaded.
+the table of every game in the Studio's README (readme.py), each committed and pushed. Every published game also
+gets objdiff's report as progress/report.json.gz and the workflow that publishes it as the `<VERSION>_report`
+artifact ByteMatch reads (bytematch.export): adding the repo on https://bytematch.dev/manage/new is then enough.
+Games known to ByteMatch get its badges; those with an upload token also get the report uploaded directly.
 
     python studio.py progress                 # every game that has a GitHub repo, then the Studio
     python studio.py progress --game rayman-rr --no-push
@@ -64,6 +66,7 @@ def commit_push(repo, paths, message, push=True, log=print) -> None:
         else:
             log("  inchange")
         return
+    gitutil.git(repo, "add", "--", *paths)  # new files too (report, workflow): commit -- <path> only takes known files
     r = gitutil.git(repo, "commit", "-q", "-m", message, "--", *paths)
     if r.returncode:
         log("  commit impossible : " + (r.stderr or r.stdout).strip()[-300:])
@@ -83,8 +86,9 @@ def run(game_id: str = "", push: bool = True, log=print) -> None:
         if who:
             log(f"  saute : {who} travaille sur ce jeu")
             continue
-        # the README needs no build (match.py reads the configuration); ByteMatch needs objdiff's report
-        rebuild = ["--rebuild"] if bytematch.repo_of(g) in bytematch.tokens() else []
+        # the README needs no build (match.py reads the configuration); ByteMatch needs objdiff's report, which the
+        # game's CI publishes from progress/report.json.gz (bytematch.export): always rebuilt for published games
+        rebuild = ["--rebuild"] if bytematch.repo_of(g) else []
         if rebuild:
             subprocess.run([sys.executable, "tools/configure.py", g.version], cwd=g.path, capture_output=True)
         r = subprocess.run([sys.executable, "tools/match.py", "progress", *rebuild], cwd=g.path,
@@ -95,9 +99,10 @@ def run(game_id: str = "", push: bool = True, log=print) -> None:
             continue
         log("  " + r.stdout.strip().splitlines()[-1])
         fix_title(g)
-        if bytematch.repo_of(g) in bytematch.tokens():
+        if bytematch.registered(g):
             bytematch.add_badges(g)
-        commit_push(g.path, ["README.md"], MSG + "\n", push, log)
+        files = ["README.md"] + bytematch.export(g)
+        commit_push(g.path, files, MSG + "\n", push, log)
         if push:
             bytematch.upload(g, log)  # for the commit now on GitHub; nothing without a token
     log(f"[{len(todo) + 1}/{len(todo) + 1}] DS Decomp Studio")

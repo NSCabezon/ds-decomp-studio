@@ -149,7 +149,9 @@ async function viewGame() {
     <div><h2 style="margin:0"><select style="font-size:17px;font-weight:700" onchange="selectGame(this.value)">${opts}</select></h2>
     <span class="hint">${esc(g.id)} &middot; ${esc(g.code)} ${esc(g.version)} &middot; ${esc(g.studio)} &middot;
     ${g.rom.ok ? '<span class="tag ok">ROM OK</span>' : `<span class="tag ko">${esc(g.rom.note)}</span>`}
-    ${g.remote ? `<a class="tag gh" target="_blank" href="${esc(g.remote.replace(/\.git$/, ""))}">GitHub</a>` : '<span class="tag">local</span>'}</span></div>
+    ${g.remote ? `<a class="tag gh" target="_blank" href="${esc(g.remote.replace(/\.git$/, ""))}">GitHub</a>
+      <a class="tag" target="_blank" title="Page ByteMatch du jeu. Pas encore listee ? Bouton ajouter : choisir le depot, le rapport est publie automatiquement par la CI (artefact ${esc(g.code || g.version)}_report, job Publier l'avancement)" href="https://bytematch.dev/${esc(g.remote.replace(/^.*github\.com[:/]/, "").replace(/\.git$/, ""))}">ByteMatch</a>
+      <a class="tag" target="_blank" title="Ajouter ce depot sur ByteMatch (une fois) : la CI y publie le rapport a chaque avancement" href="https://bytematch.dev/manage/new">+ ByteMatch</a>` : '<span class="tag">local</span>'}</span></div>
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions${g.modules > 1 ? ` (${g.modules} modules, principal ${g.pct_main.toFixed(2)} %)` : ""}</div>
     ${g.left_manual ? `<div class="hint" style="text-align:right"><a href="#game" onclick="sub='functions';fnKind='manual';render();return false">${fmt(g.left_manual)} a faire a la main</a> (Thumb, overlays, ITCM : pas d'outil auto)</div>` : ""}</div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
