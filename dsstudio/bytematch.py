@@ -56,6 +56,46 @@ def version_of(g) -> str:
 
 
 MANAGE_NEW = f"{SITE}/manage/new"
+
+# The settings of each project's ByteMatch page (Manage > Settings): official title from the ROM's banner, series,
+# first release year (None when not sure). The platform is always "nds" (Nintendo DS).
+PAGES = {
+    "rayman-rr": ("Rayman Raving Rabbids", "Rayman", 2006),
+    "ultimate-spider-man": ("Ultimate Spider-Man", "Spider-Man", 2005),
+    "spyro-shadow-legacy": ("Spyro: Shadow Legacy", "Spyro", 2005),
+    "spider-man-web-of-shadows": ("Spider-Man: Web of Shadows", "Spider-Man", 2008),
+    "simpsons-game": ("The Simpsons Game", "The Simpsons", 2007),
+    "resident-evil-deadly-silence": ("Resident Evil: Deadly Silence", "Resident Evil", 2006),
+    "nintendogs-dachshund": ("Nintendogs: Dachshund & Friends", "Nintendogs", 2005),
+    "powerpuff-girls-z": ("Game de Demashita! Powerpuff Girls Z", "The Powerpuff Girls", None),
+    "mysims": ("MySims", "MySims", 2007),
+    "livly-garden": ("Livly Garden", "Livly Island", None),
+    "blue-dragon-awakened-shadow": ("Blue Dragon: Awakened Shadow", "Blue Dragon", 2009),
+    "heroes-of-mana": ("Heroes of Mana", "Mana", 2007),
+    "lego-star-wars-ii-the-original-trilogy": ("LEGO Star Wars II: The Original Trilogy", "LEGO Star Wars", 2006),
+    "harvest-moon-ds": ("Harvest Moon DS", "Harvest Moon", 2005),
+    "farm-frenzy": ("Farm Frenzy: Animal Country", "Farm Frenzy", None),
+    "code-lyoko": ("Code Lyoko", "Code Lyoko", 2007),
+    "fairy-tail-madoushi": ("Fairy Tail: Gekitou! Madoushi Kessen", "Fairy Tail", None),
+    "fairy-tail-kardia": ("Fairy Tail: Gekitotsu! Kardia Daiseidou", "Fairy Tail", None),
+    "cooking-mama": ("Cooking Mama", "Cooking Mama", 2006),
+    "eyeshield-21": ("Eyeshield 21: Max Devil Power!", "Eyeshield 21", 2005),
+    "dragon-ball-origins": ("Dragon Ball: Origins", "Dragon Ball", 2008),
+}
+REGIONS = {"E": "USA", "P": "Europe", "J": "Japan", "F": "France", "D": "Germany", "X": "Spanish",
+           "S": "Spain", "I": "Italy", "U": "Australia", "Y": "Europe", "V": "Europe"}
+
+
+def page_fields(g) -> dict:
+    """What the project's ByteMatch settings should say (see PAGES)."""
+    title, franchise, year = PAGES.get(g.id, (g.title, "", None))
+    code = version_of(g)
+    region = REGIONS.get(code[-1:], "") if len(code) == 4 else ""
+    return {"name": f"{title} (DS)", "shortName": title, "platform": "nds", "game": title, "franchise": franchise,
+            "releaseYear": str(year or ""), "defaultVersion": code,
+            "description": f"Matching decompilation of {title} for the Nintendo DS"
+                           + (f" ({region} version, {code})" if region else f" ({code})")
+                           + ": C that compiles back to the original ROM, byte for byte."}
 WORKFLOW = ".github/workflows/progress.yaml"
 REPORT = "progress/report.json.gz"
 
