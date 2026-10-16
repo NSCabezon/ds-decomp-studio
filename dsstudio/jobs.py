@@ -121,7 +121,8 @@ def command(jid: str, game, p: dict) -> str:
                 f" --agents {int(p.get('agents') or s['qwen_agents'])} --max {int(p.get('max') or 0)}"
                 f" --batch {int(p.get('batch') or 10)}"
                 f" --variants {int(p.get('variants') or s['qwen_variants'])}"
-                f" --group {int(p.get('group') or s['qwen_group'])}")
+                f" --group {int(p.get('group') or s['qwen_group'])}"
+                f" --backend {_q(p.get('backend') or s['qwen_backend'])} --server {_q(p.get('server') or s['qwen_server'])}")
     if jid == "sync_tools":
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} sync-tools {_q(game.id)}"
     if jid == "sync_all":

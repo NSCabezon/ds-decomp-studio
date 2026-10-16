@@ -462,14 +462,16 @@ function viewSettings() {
     <tr><td>Taches machine en parallele</td><td><input id="s-par" type="number" min="1" max="8" value="${s.max_parallel_jobs}"></td></tr>
     <tr><td>Modele Qwen (Ollama)</td><td><input id="s-model" value="${esc(s.qwen_model)}"></td></tr>
     <tr><td>Agents Qwen en parallele (par defaut)<div class="hint">Ollama doit avoir OLLAMA_NUM_PARALLEL &ge; ce nombre (variable d'environnement, puis redemarrer Ollama). Avec 16 Go de VRAM : environ 4 pour qwen9-ctx, 8 pour qwen-ctx (4b).</div></td><td><input id="s-agents" type="number" min="1" max="16" value="${s.qwen_agents}"></td></tr>
-    <tr><td>Minutes max par fonction (Qwen)</td><td><input id="s-min" type="number" min="1" max="60" value="${s.qwen_minutes}"></td></tr>
+    <tr><td>Minutes max par fonction (Qwen)<div class="hint">Seul le temps de generation compte : l'attente de son tour sur le GPU ne mange pas le temps d'une fonction.</div></td><td><input id="s-min" type="number" min="1" max="60" value="${s.qwen_minutes}"></td></tr>
+    <tr><td>Serveur du modele<div class="hint">llama.cpp : vraies requetes en parallele (une par agent), meme pour qwen3.5 qu'Ollama traite une par une. Demarre tout seul avec le fichier du modele deja telecharge par Ollama.</div></td><td><select id="s-backend"><option value="ollama" ${s.qwen_backend === "ollama" ? "selected" : ""}>Ollama</option><option value="openai" ${s.qwen_backend === "openai" ? "selected" : ""}>llama.cpp server (ou vLLM)</option></select> <input id="s-server" value="${esc(s.qwen_server)}" style="width:200px"></td></tr>
     <tr><td>Publier les prises de blocs sur GitHub</td><td><input id="s-push" type="checkbox" ${s.push_claims ? "checked" : ""}></td></tr>
     <tr><td>Compte GitHub</td><td><input id="s-owner" value="${esc(s.github_owner)}" placeholder="rempli a la 1re publication"></td></tr></table>
     <div class="btns" style="margin-top:12px"><button class="btn" onclick="saveSettings()">Enregistrer</button></div></div>`;
 }
 async function saveSettings() {
   const r = await api("settings", {who: $("#s-who").value.trim(), max_parallel_jobs: +$("#s-par").value, qwen_model: $("#s-model").value.trim(),
-    qwen_minutes: +$("#s-min").value, qwen_agents: +$("#s-agents").value, push_claims: $("#s-push").checked, github_owner: $("#s-owner").value.trim()});
+    qwen_minutes: +$("#s-min").value, qwen_agents: +$("#s-agents").value, qwen_backend: $("#s-backend").value,
+    qwen_server: $("#s-server").value.trim(), push_claims: $("#s-push").checked, github_owner: $("#s-owner").value.trim()});
   if (!r.error) { O.settings = r; toast("Reglages enregistres"); }
 }
 

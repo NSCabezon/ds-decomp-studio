@@ -9,7 +9,12 @@ rewrite it until the project's probe_compiler.py says MATCH. Each request is mad
 reading the prompt is the slow part (qwen3.5 serves one request at a time):
   - several versions per answer (--variants), all compiled in parallel; the best one is the base of the next request;
   - small functions (--group-size) go by batches of neighbours (--group) in one request;
-  - big functions (--patch-size / --patch-lines) get SEARCH/REPLACE edits instead of the whole file (less to write).
+  - big functions (--patch-size / --patch-lines) get SEARCH/REPLACE edits instead of the whole file (less to write);
+  - the prompt starts with what never changes (rules, target assembly, context) so the server reuses its cache;
+  - all versions of a function are compiled in one compiler call, in this process (no probe subprocess per try);
+  - with a server that answers one request at a time (Ollama + qwen3.5), 2 agents take turns: one compiles while
+    the other generates, and the time limit only counts generation;
+  - --backend openai: llama.cpp server (workers/llm_server.py, started on demand) or vLLM, real parallel requests.
 Agents never touch the project: matches go to one
 integrator, which adds them in batches (src/auto/ + delinks.txt, clang-format), runs `match.py verify`, and
 commits (+ pushes) only if it passes; a failing batch is retried one function at a time.
@@ -25,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -47,6 +53,9 @@ ap.add_argument("--patch-size", type=int, default=400, help="functions from this
 ap.add_argument("--patch-lines", type=int, default=60, help="... or whose C has this many lines")
 ap.add_argument("--max-tokens", type=int, default=8192, help="cap of one answer")
 ap.add_argument("--compile-jobs", type=int, default=max(2, (os.cpu_count() or 4) // 2), help="compilers at once")
+ap.add_argument("--backend", choices=["ollama", "openai"], default="ollama",
+                help="ollama, or openai = any OpenAI-compatible server (llama.cpp server, vLLM): real parallel requests")
+ap.add_argument("--server", default="http://127.0.0.1:8080", help="URL of the OpenAI-compatible server")
 ap.add_argument("--no-push", action="store_true")
 ap.add_argument("--no-neighbours", action="store_true",
                 help="after a match, do not retry its callers / callees with auto_match (clones are always made)")
@@ -161,33 +170,69 @@ def starting_draft(name):
 CODE_BLOCK = re.compile(r"```[a-zA-Z]*[ \t]*\n.*?```", re.S)
 
 
-def ask(messages, temp, deadline, blocks=1, num_predict=2048):
+OLLAMA = "http://127.0.0.1:11434"
+
+
+def ask(messages, temp, deadline, blocks=1, num_predict=2048) -> tuple[str, dict]:
     """The model's answer, read as it is written and cut as soon as `blocks` ```c blocks are closed: some models go on
     writing after the code (explanations, another version...) and would use the whole time of the function.
-    blocks=0: read until the model stops (patch answers have no fixed number of blocks)."""
-    body = json.dumps({"model": args.model, "messages": messages, "stream": True,
-                       "options": {"temperature": temp, "num_predict": num_predict}, "think": False}).encode()
-    req = urllib.request.Request("http://127.0.0.1:11434/api/chat", body, {"Content-Type": "application/json"})
-    text = []
+    blocks=0: read until the model stops (patch answers have no fixed number of blocks).
+    Backends: Ollama (/api/chat) or any OpenAI-compatible server (llama.cpp server, vLLM: /v1/chat/completions).
+    Also returns timings: `ttft` (seconds to the first token: reading the prompt, short when its start was cached),
+    `gen` (whole answer), and the server's own counts when it sends them (prompt tokens, cached tokens)."""
+    if args.backend == "openai":
+        body = {"model": args.model, "messages": messages, "stream": True, "temperature": temp,
+                "max_tokens": num_predict, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
+                "cache_prompt": True,  # llama.cpp: keep the KV cache of the prompt's start for the next request
+                "chat_template_kwargs": {"enable_thinking": False}}
+        url = args.server.rstrip("/") + "/v1/chat/completions"
+    else:
+        body = {"model": args.model, "messages": messages, "stream": True,
+                "options": {"temperature": temp, "num_predict": num_predict}, "think": False}
+        url = OLLAMA + "/api/chat"
+    req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    text, t0, info = [], time.time(), {}
     with urllib.request.urlopen(req, timeout=max(30, deadline - time.time())) as r:
-        for line in r:  # one JSON object per line
-            if not line.strip():
+        for line in r:  # Ollama: one JSON object per line; OpenAI: server-sent events "data: {...}"
+            line = line.strip()
+            if not line:
                 continue
-            part = json.loads(line)
-            text.append(part.get("message", {}).get("content", ""))
-            if part.get("done") or time.time() > deadline:
+            if args.backend == "openai":
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[5:].strip()
+                if data == b"[DONE]":
+                    break
+                part = json.loads(data)
+                if part.get("timings"):  # llama.cpp
+                    tm = part["timings"]
+                    info.update(prompt=tm.get("prompt_n"), cached=tm.get("cache_n"), prompt_s=(tm.get("prompt_ms") or 0) / 1000)
+                choice = (part.get("choices") or [{}])[0]
+                piece, done = (choice.get("delta") or {}).get("content") or "", choice.get("finish_reason") is not None
+            else:
+                part = json.loads(line)
+                piece, done = part.get("message", {}).get("content", ""), part.get("done")
+                if done and part.get("prompt_eval_count") is not None:
+                    info.update(prompt=part["prompt_eval_count"], prompt_s=part.get("prompt_eval_duration", 0) / 1e9)
+            if piece and "ttft" not in info:
+                info["ttft"] = time.time() - t0
+            text.append(piece)
+            if done or time.time() > deadline:
                 break
-            if blocks and "```" in text[-1] and len(CODE_BLOCK.findall("".join(text))) >= blocks:
-                break  # closing the connection stops the generation in Ollama
-    return "".join(text)
+            if blocks and "```" in piece and len(CODE_BLOCK.findall("".join(text))) >= blocks:
+                break  # closing the connection stops the generation (Ollama, llama.cpp)
+    info["gen"] = time.time() - t0
+    return "".join(text), info
 
 
 NO_PARALLEL = {"qwen35"}  # architectures Ollama runs one request at a time ("does not support parallel requests")
 
 
 def model_runs_in_parallel(model: str) -> bool:
+    if args.backend == "openai":
+        return True  # llama.cpp server --parallel N / vLLM: real parallel slots (continuous batching)
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/show", json.dumps({"model": model}).encode(),
+        req = urllib.request.Request(OLLAMA + "/api/show", json.dumps({"model": model}).encode(),
                                      {"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as r:
             arch = json.loads(r.read()).get("model_info", {}).get("general.architecture", "")
@@ -246,37 +291,113 @@ class Fn:
         self.name, self.size, self.addr = name, size, addr
         self.best, self.out, self.score, self.profile = src, "", 10**6, None
         self.notes, self.context, self.source = [], "", None  # source: the matching C, once found
+        self._target, self._target_lines, self._asm = None, None, None
 
     @property
     def patch_mode(self) -> bool:
         """Big function: ask for edits instead of the whole file."""
         return self.size >= args.patch_size or self.best.count("\n") >= args.patch_lines
 
-    def message(self, room: int) -> str:
+    @property
+    def target(self) -> bytes:
+        if self._target is None:
+            import probe_compiler as pc
+            self._target = pc.target_bytes(self.addr, self.size)
+        return self._target
+
+    def target_lines(self) -> list[str]:
+        if self._target_lines is None:
+            import probe_compiler as pc
+            self._target_lines = pc.disasm(self.target, self.addr)
+        return self._target_lines
+
+    def fixed(self) -> str:
+        """The part of the prompt that never changes for this function (first, so the server reuses its cache)."""
+        if self._asm is None:
+            import auto_match as am
+            self._asm = am.function_asm(self.name) or "\n".join(self.target_lines())
+        context = f"Context (where this code comes from):\n{self.context}\n\n" if self.context else ""
+        return f"{context}Target assembly of {self.name} (the original function):\n```\n{self._asm.strip()}\n```"
+
+    def varying(self, room: int) -> str:
+        """What changes at each try (last): the best file so far, what it compiles to, the failed tries."""
         extra = ("\n\nAlready tried from this file, all worse or equal (do something different):\n" +
                  "\n".join(self.notes[-6:])) if self.notes else ""
-        context = f"Context (where this code comes from):\n{self.context}\n\n" if self.context else ""
-        return f"{context}File:\n```c\n{self.best}```\n\nResult of this file:\n{self.out[-room:]}{extra}"
+        return (f"Current best file for {self.name}:\n```c\n{self.best}```\n\n"
+                f"Compiler result of this file (TARGET | CANDIDATE, * = differs):\n{self.out[-room:]}{extra}")
 
 
 COMPILE_POOL = ThreadPoolExecutor(max_workers=max(1, args.compile_jobs))
-_variant_seq = [0]
-_seq_lock = threading.Lock()
+GEN = threading.Semaphore(1)  # turns on the model server (main() sets the number of requests it serves at once)
+
+
+def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool, str]]:
+    """Compiles every version of one function in ONE compiler call (the compiler takes about a second to start,
+    almost nothing per file), in this process (no probe_compiler.py subprocess per try). Same output as
+    `probe_compiler.py --show`: side-by-side disassembly, then `<version> | -O4,p: N/M diff`."""
+    import auto_match as am
+    import probe_compiler as pc
+    version, _, extra = profile.partition(" ")
+    mwcc = am.MWCC_ROOT / version / "mwccarm.exe"
+    out: dict[int, tuple[bool, str]] = {}
+    with tempfile.TemporaryDirectory(dir=WORK) as tmp:
+        t = Path(tmp)
+        (t / "objs").mkdir()
+        for i, code in enumerate(codes):
+            (t / f"v{i}.c").write_text(code, encoding="utf-8", newline="\n")
+        pending = list(range(len(codes)))
+        while pending:
+            files = " ".join(f"v{i}.c" for i in pending)
+            cmd = f'"{mwcc}" {FLAGS} {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c {files} -o objs'
+            r = am.run_limited(cmd, cwd=t, shell=True, timeout=30 + len(pending))
+            if r.stderr == "timeout":
+                for i in pending:
+                    out[i] = (False, f"{version:14} | {FLAGS}: compile error (timeout)")
+                break
+            missing = [i for i in pending if not (t / "objs" / f"v{i}.o").exists()]
+            for i in pending:
+                if i in missing:
+                    continue
+                cand = pc.compiled_function(t / "objs" / f"v{i}.o", fn.name)
+                if cand is None:
+                    out[i] = (False, f"{version:14} | {FLAGS}: function not found")
+                    continue
+                bad, n = pc.compare(fn.target, cand)
+                tag = "MATCH" if bad == 0 else f"{bad}/{n} diff" + ("" if len(cand) == fn.size else f" (size 0x{len(cand):x})")
+                out[i] = (bad == 0, ("" if bad == 0 else side_by_side(fn, cand) + "\n") + f"{version:14} | {FLAGS}: {tag}")
+            if not missing:
+                break
+            # the compiler stops at the first file with an error: that one failed, the next ones were not compiled
+            err = "\n".join((r.stdout + r.stderr).strip().splitlines()[:12])
+            out[missing[0]] = (False, f"{err}\n{version:14} | {FLAGS}: compile error")
+            pending = missing[1:]
+    return [out.get(i, (False, f"{version:14} | {FLAGS}: compile error")) for i in range(len(codes))]
+
+
+def side_by_side(fn: Fn, cand: bytes) -> str:
+    import probe_compiler as pc
+    t, c = fn.target_lines(), pc.disasm(cand, fn.addr)
+    rows = [f"     {'TARGET':38} | CANDIDATE"]
+    for i in range(max(len(t), len(c))):
+        a, b = (t[i] if i < len(t) else ""), (c[i] if i < len(c) else "")
+        rows.append(f"   {' ' if a == b else '*'} {a:38} | {b}")
+    return "\n".join(rows)
 
 
 def probe_many(cands: list[tuple["Fn", str, str]]) -> list[tuple[bool, str]]:
-    """Compiles [(fn, code, profile)] in parallel (each in its own file): [(match, probe output)]."""
-    def one(c):
-        fn, code, profile = c
-        with _seq_lock:
-            _variant_seq[0] += 1
-            path = WORK / f"{fn.name}.v{_variant_seq[0]}.c"
-        path.write_text(code, encoding="utf-8", newline="\n")
-        try:
-            return probe(path, fn.name, fn.addr, profile)
-        finally:
-            path.unlink(missing_ok=True)
-    return list(COMPILE_POOL.map(one, cands))
+    """Compiles [(fn, code, profile)]: one compiler call per (function, compiler), those calls in parallel.
+    Returns [(match, probe output)] in the same order."""
+    groups: dict[tuple[int, str], list[int]] = {}
+    for k, (fn, _code, profile) in enumerate(cands):
+        groups.setdefault((id(fn), profile), []).append(k)
+    def one(idx):
+        fn, _c, profile = cands[idx[0]]
+        return idx, compile_versions(fn, [cands[k][1] for k in idx], profile)
+    res: list = [None] * len(cands)
+    for idx, outs in COMPILE_POOL.map(one, list(groups.values())):
+        for k, o in zip(idx, outs):
+            res[k] = o
+    return res
 
 
 def clean(code: str, name: str) -> str:
@@ -348,24 +469,28 @@ def parse_group(reply: str, fns: list[Fn]) -> dict[str, list[str]]:
     return out
 
 
-def request(fns: list[Fn], temp: float, deadline: float) -> dict[str, list[str]]:
-    """One request to the model for these functions: {function: [candidate C files]}."""
+def request(fns: list[Fn], temp: float, deadline: float) -> tuple[dict[str, list[str]], dict]:
+    """One request to the model for these functions: ({function: [candidate C files]}, timings).
+    The prompt starts with what never changes (rules, target assembly, context) and ends with what changes at each
+    try (best file, its result, failed tries): the server keeps the start in its cache and only reads the end."""
     v = max(1, args.variants)
     if len(fns) > 1:
         n = max(1, args.group_variants)
         system = RULES + FMT_GROUP.format(n=n)
-        user = "\n\n".join(f"### {f.name}\n{f.message(2500)}" for f in fns)
+        user = ("\n\n".join(f"### {f.name}\n{f.fixed()}" for f in fns) + "\n\n----- current state -----\n\n"
+                + "\n\n".join(f"### {f.name}\n{f.varying(2500)}" for f in fns))
         blocks, predict = n * len(fns), sum(n * (len(f.best) // 3 + 150) for f in fns)
     elif fns[0].patch_mode:
         # room for the edits, or for one whole file when the model writes that instead
-        system, user, blocks = RULES + FMT_PATCH.format(n=v), fns[0].message(6000), 0
-        predict = max(700 * v, len(fns[0].best) // 3 + 400)
+        f = fns[0]
+        system, user, blocks = RULES + FMT_PATCH.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}", 0
+        predict = max(700 * v, len(f.best) // 3 + 400)
     else:
         f = fns[0]
-        system, user = RULES + FMT_FULL.format(n=v), f.message(6000)
+        system, user = RULES + FMT_FULL.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}"
         blocks, predict = v, v * (len(f.best) // 3 + 150)
-    reply = ask([{"role": "system", "content": system}, {"role": "user", "content": user}], temp, deadline,
-                blocks=blocks, num_predict=max(1024, min(args.max_tokens, predict)))
+    reply, info = ask([{"role": "system", "content": system}, {"role": "user", "content": user}], temp, deadline,
+                      blocks=blocks, num_predict=max(1024, min(args.max_tokens, predict)))
     try:  # the last raw answer, to see what the model writes when versions go missing
         (WORK / "last_reply.txt").write_text(reply, encoding="utf-8")
     except OSError:
@@ -386,19 +511,28 @@ def request(fns: list[Fn], temp: float, deadline: float) -> dict[str, list[str]]
         log(f"  ({raw} version(s) recue(s), toutes identiques au fichier donne)")
     elif not raw:
         log(f"  (reponse de {len(reply)} caracteres sans bloc de code reconnu : build/qwen_auto/last_reply.txt)")
-    return out
+    return out, info
 
 
 def solve(unit: list[Fn]) -> None:
     """Works on one function or a batch of small ones until each matches or the time is out (minutes per function).
-    Each request asks for several versions; every version is compiled, the best one becomes the new base."""
-    deadline = time.time() + args.minutes * 60 * len(unit)
+    Each request asks for several versions; every version is compiled, the best one becomes the new base.
+    The time limit counts only the model's work for this unit: with a server that answers one request at a time,
+    agents take turns on it (GEN) and one agent compiles while another one generates; waiting for the turn costs
+    nothing. A wall clock limit (3x) still ends a unit that never gets its turn."""
+    budget = args.minutes * 60 * len(unit)
+    used, wall_end = 0.0, time.time() + 3 * budget + 120
     pending, empty, rnd = list(unit), 0, 0
-    while pending and time.time() < deadline and not STOP.exists():
+    while pending and used < budget and time.time() < wall_end and not STOP.exists():
         rnd += 1
         temp = min(1.0, 0.5 + 0.05 * max(len(f.notes) for f in pending))
         try:
-            cands = request(pending, temp, deadline)
+            with GEN:
+                t0 = time.time()
+                try:
+                    cands, info = request(pending, temp, t0 + budget - used)
+                finally:
+                    used += time.time() - t0
         except Exception as e:
             if isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError) \
                     or "timed out" in str(e) or "10060" in str(e):  # 10060: Windows timeout, message translated
@@ -414,7 +548,11 @@ def solve(unit: list[Fn]) -> None:
                 return
             continue
         empty = 0
+        tc = time.time()
         results = probe_many(todo)
+        cached = f", {info['cached']} en cache" if info.get("cached") else ""
+        log(f"  tour {rnd}: 1er token {info.get('ttft', 0):.1f}s{cached}, reponse {info.get('gen', 0):.1f}s, "
+            f"{len(todo)} versions compilees en {time.time() - tc:.1f}s")
         for f in list(pending):
             mine = [(score(out), ok, code, out) for (g, code, _p), (ok, out) in zip(todo, results) if g is f]
             if not mine:
@@ -571,6 +709,36 @@ def ollama_up() -> bool:
         return False
 
 
+def openai_up() -> bool:
+    try:
+        with urllib.request.urlopen(args.server.rstrip("/") + "/v1/models", timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def ensure_openai_server(wait: float = 240) -> bool:
+    """The OpenAI-compatible server answers, or llama.cpp server is started on this model (workers/llm_server.py:
+    the model file Ollama already downloaded, one slot per agent)."""
+    if openai_up():
+        return True
+    launcher = Path(__file__).resolve().parent / "llm_server.py"
+    log(f"serveur {args.server} injoignable : demarrage de llama.cpp server ({args.model}, {args.agents} slots)...")
+    r = run([sys.executable, str(launcher), "start", "--model", args.model, "--parallel", str(max(1, args.agents)),
+             "--url", args.server])
+    if r.returncode:
+        log((r.stdout + r.stderr).strip()[-600:])
+        return False
+    end = time.time() + wait
+    while time.time() < end:
+        if openai_up():
+            log("llama.cpp server pret")
+            return True
+        time.sleep(2)
+    log(f"le serveur ne repond toujours pas : voir {launcher.parent.parent / 'data' / 'logs' / 'llm_server.log'}")
+    return False
+
+
 def ensure_ollama(wait: float = 90) -> bool:
     """Starts Ollama when it is not running (the Windows app, else `ollama serve`) and waits until it answers."""
     if ollama_up():
@@ -600,7 +768,7 @@ def main():
     missing = [b for b in BLOCKS if b not in blocks]
     if missing:
         sys.exit(f"blocs introuvables dans .studio/blocks.json : {missing}")
-    if not ensure_ollama():
+    if not (ensure_openai_server() if args.backend == "openai" else ensure_ollama()):
         sys.exit(1)
     import auto_match as am
     syms = {}
@@ -644,10 +812,17 @@ def main():
     todo.sort(key=order)
     if args.max:
         todo = todo[:args.max]
+    global GEN
     if args.agents > 1 and not model_runs_in_parallel(args.model):
-        # several agents would only queue behind each other, each one getting a fraction of its time limit
-        log(f"le modele {args.model} ne repond qu'a une requete a la fois dans Ollama : 1 agent au lieu de {args.agents}")
-        args.agents = 1
+        # One request at a time on the GPU: 2 agents take turns, one compiles while the other generates (the time
+        # limit only counts generation, see solve). More agents would only wait longer for their turn.
+        if args.agents > 2:
+            log(f"le modele {args.model} ne repond qu'a une requete a la fois dans Ollama : 2 agents (au lieu de "
+                f"{args.agents}) qui alternent generation et compilation")
+            args.agents = 2
+        GEN = threading.Semaphore(1)
+    else:
+        GEN = threading.Semaphore(max(1, args.agents))
     # Small functions go by batches of neighbours of similar size (same module of the SDK / engine most of the time):
     # one request for several of them. Each batch starts where the queue order puts its first function.
     units, used = [], set()

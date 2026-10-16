@@ -50,6 +50,8 @@ DEFAULTS = {
     "qwen_agents": 4,                            # functions worked on at once (Ollama needs OLLAMA_NUM_PARALLEL >= this)
     "qwen_variants": 4,                          # versions asked in one answer, compiled in parallel
     "qwen_group": 6,                             # small functions sent in one request (1 = never batch)
+    "qwen_backend": "ollama",                    # or "openai": llama.cpp server (workers/llm_server.py) / vLLM
+    "qwen_server": "http://127.0.0.1:8080",      # URL of the OpenAI-compatible server
     "max_parallel_jobs": 2,
     "active_game": "",
     "push_claims": True,                         # claims are pushed to GitHub when the game has a remote

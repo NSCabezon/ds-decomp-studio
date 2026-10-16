@@ -30,7 +30,8 @@ python studio/studio.py done <game> <block>                    # or `release` to
 
 - `dsstudio/games.py`: project discovery, functions, matched state (`delinks.txt`), cross-game twins (`fpdb.sqlite`).
 - `dsstudio/difficulty.py`: levels. `dsstudio/blocks.py`: blocks and claims. `dsstudio/jobs.py`: machine task queue.
-- `dsstudio/server.py` + `web/`: the web app. `workers/qwen_block.py`: local Qwen agents on blocks.
+- `dsstudio/server.py` + `web/`: the web app. `workers/qwen_block.py`: local Qwen agents on blocks (Ollama, or an
+  OpenAI-compatible server: `workers/llm_server.py` runs llama.cpp server on the GGUF file Ollama downloaded).
 - `gametools/`: the ONLY source of the matching tools copied into every game's `tools/` (`studio.py sync-tools`).
   They read game-specific values from `tools/project.py`. Change tools here, never in a game's copy.
   `gametools/find_culprits.py` finds the files that break the ROM from one build (byte comparison).
