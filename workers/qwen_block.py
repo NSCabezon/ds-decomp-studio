@@ -107,6 +107,28 @@ Keep the first lines (#define / #include) and the function name. Never make the 
 A short context may come first (which library or part of the game the function is in, what it calls, by real name
 when known): use it to choose meaningful types and variable names, but the target assembly always decides.
 Never give back a file unchanged: every version must change something.
+
+How mwccarm decides the code (use it to choose what to change):
+- Registers: r0-r3 arguments and scratch, r4-r11 saved (pushed together: stmdb sp!, {r4-r8, lr}). Which local gets
+  which saved register follows the declaration order and first use: when only registers differ, swap two
+  declarations or two independent statements, or make a value a separate local / recompute it. A compiler flag is
+  almost never the cause.
+- Stack frame (sub sp / add sp, every [sp, #n]): it holds every local and temporary, struct copies and the locals of
+  inlined code included. Frame too small: the original had one more local or struct; too big: you have one too many.
+  Locals sit in declaration order. When everything matches but the frame, the logic is right: fix the locals.
+- Inlining (-O4): small functions defined earlier in the same file, and inline functions of headers, are inlined. If
+  the target calls a function, call it; if the target has its code inlined, write it out.
+- if/else keeps the source order: the fall-through block is the first branch written. A ternary can compile
+  differently from if/else: try both. Loops with a known count become pointer walks and may be unrolled.
+- No FPU: float math calls _fadd/_fsub/_fmul/_fdiv/_ffix/_fflt/_fls/_fgr..., double math _dadd/_dmul...; / and %
+  call _s32_div_f/_u32_div_f. Constants and addresses come from the literal pool after the function, in the order
+  of their first use in the C.
+- Respellings worth trying, in this order: a condition as a value vs a comparison; the comparison the other way round
+  (a < b / b > a); one return vs a return in each branch; the declaration order; a local vs the expression written
+  inline; the grouping of a + b + c; bitfields vs masks.
+Forbidden, refused without compiling (fake matches): asm in any form, new #define/#pragma/#include/#if lines, ##,
+_Pragma, __declspec, __attribute__, machine code written as numbers. volatile only for hardware registers
+(0x04xxxxxx); no empty statements or do {} while (0) that only exist to move the score.
 """
 # One request gives several tries: the prompt is read once (qwen3.5 serves one request at a time), the candidates
 # are compiled in parallel.
@@ -356,6 +378,7 @@ class Fn:
     def __init__(self, name, size, addr, src):
         self.name, self.size, self.addr = name, size, addr
         self.best, self.out, self.score, self.profile = src, "", (10**6, 10**6), None
+        self.draft = src  # the starting file: what fake_match compares candidates with
         self.lines = []  # disassembly of what the best file compiles to
         self.pop: list[tuple[tuple[int, int], str]] = []  # the best different candidates (genetic crossover)
         self.stale = 0  # rounds without progress (plateau)
@@ -614,7 +637,7 @@ def load_memory(fn: Fn) -> None:
     fn.tried |= set(m.get("tried", []))
     fn.notes = m.get("notes", [])[-6:]
     fn.sessions = m.get("sessions", 0)
-    if m.get("best") and tuple(m.get("score", (10**6, 10**6))) < fn.score:
+    if m.get("best") and tuple(m.get("score", (10**6, 10**6))) < fn.score and not pt.fake_match(m["best"], fn.draft):
         fn.best, fn.profile = m["best"], m.get("profile") or fn.profile
 
 
@@ -862,11 +885,21 @@ def solve(unit: list[Fn], minutes: float, plateau: int, final: bool = False) -> 
             cands[f.name] += rule_variants(f) + crossover(f)
         todo = []
         for f in pending:
+            refused = {}
             for c in dict.fromkeys(cands.get(f.name, [])):
                 h = code_hash(c)
                 if h not in f.tried:
                     f.tried.add(h)
-                    todo.append((f, c, f.profile))
+                    why = pt.fake_match(c, f.draft)
+                    if why:
+                        refused[why] = refused.get(why, 0) + 1
+                    else:
+                        todo.append((f, c, f.profile))
+            for why, k in refused.items():
+                log(f"  {f.name}: {k} version(s) refusee(s) sans compiler (faux match : {why})")
+                note = f"- a version used {why}: REFUSED without compiling (fake match). Write plain C only."
+                if note not in f.notes:
+                    f.notes.append(note)
         if think and not model_gave:
             for f in pending:  # the reasoning used every token: no more thinking for these
                 f.no_think = True
@@ -1224,6 +1257,10 @@ def main():
 
     def matched(f: Fn, source: str) -> None:
         if f.name in done_names:
+            return
+        why = pt.fake_match(source, f.draft)
+        if why:  # last gate: a match from memory or the permuter is checked too
+            log(f"{f.name}: match refuse, pas integre (faux match : {why})")
             return
         done_names.add(f.name)
         if f.profile != default and not source.startswith(am.MARKER):
