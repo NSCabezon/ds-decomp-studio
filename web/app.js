@@ -179,6 +179,7 @@ function subBlocks() {
     <span style="flex:1"></span>
     <button class="btn" onclick="claimNext()">Prendre le prochain bloc ${fLevel !== null ? esc(LV(fLevel).label) : "le plus facile"}</button>
     <button class="btn sec" onclick="qwenDialog(null)">Agents Qwen sur plusieurs blocs</button>
+    <button class="btn sec" title="les fonctions que Qwen a laissees a 1-3 instructions pres (build/qwen_auto/hard.json), avec le modele de la file difficile (Reglages)" onclick="runJob('qwen',{hard:true})">Qwen sur la file difficile</button>
     <button class="btn sec" onclick="rebuildBlocks()" title="Refait les blocs avec les fonctions restantes. Les blocs pris ne bougent pas.">Recalculer les blocs</button></div>
     <div class="blocks">`;
   for (const b of bl) {
@@ -222,7 +223,7 @@ function qwenDialog(ids) {
     <table>${ids ? "" : `<tr><td>Niveau</td><td><select data-k="level"><option value="">le plus facile d'abord</option>${O.levels.map(l => `<option value="${l.n}" ${fLevel === l.n ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></td></tr>
       ${optField(["count", `Nombre de blocs a donner a Qwen (${free} libres ici)`, "number", Math.min(4, Math.max(free, 1))])}`}
       ${optField(["agents", "Agents en parallele", "number", s.qwen_agents])}
-      ${optField(["minutes", "Minutes max par fonction", "number", s.qwen_minutes])}
+      ${optField(["minutes", "Minutes max par fonction proche (2e passe ; la 1re passe rapide fait 1,5 min et s'arrete si plus de progres)", "number", s.qwen_minutes])}
       ${optField(["max", "Nombre max de fonctions (0 = toutes)", "number", 0])}
       ${optField(["batch", "Matches verifies ensemble", "number", 10])}
       ${optField(["variants", "Versions demandees par reponse (toutes compilees en parallele)", "number", s.qwen_variants])}
@@ -437,7 +438,7 @@ async function viewEngine() {
   h += `<div class="split"><div class="card"><h3>Jeux indexes (base d'empreintes)</h3><p class="hint">SDK = code Nintendo present dans 5 jeux ou plus. Unique = code propre au jeu.</p>
     <table><tr><th>Jeu</th><th class="num">Fonctions</th><th class="num">SDK</th><th class="num">Unique</th></tr>
     ${d.games.map(g => `<tr><td>${esc(g.title)}<div class="hint">${esc(g.studio)}</div></td><td class="num">${fmt(g.functions)}</td><td class="num">${fmt(g.sdk)}</td><td class="num">${fmt(g.unique)}</td></tr>`).join("")}</table>
-    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button><button class="btn small sec" title="compile les depots de decomps-externes/ (NitroSDK, pret...)" onclick="api('run',{id:'donors_index'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les decomps externes</button><button class="btn small sec" title="${esc(JD('clone_all').desc)}" onclick="api('run',{id:'clone_all'}).then(r=>r.n&&toast('Clonage lance'))">Cloner les jumelles dans tous les jeux</button></div></div>
+    <div class="btns" style="margin-top:10px"><button class="btn small sec" onclick="api('run',{id:'scan'}).then(r=>r.n&&toast('Indexation lancee'))">Re-indexer les empreintes</button><button class="btn small sec" title="compile les depots de decomps-externes/ (NitroSDK, pret...)" onclick="api('run',{id:'donors_index'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les decomps externes</button><button class="btn small sec" title="${esc(JD('dataset').desc)}" onclick="api('run',{id:'dataset'}).then(r=>r.n&&toast('Export lance'))">Exporter le jeu de donnees (LoRA)</button><button class="btn small sec" title="${esc(JD('examples').desc)}" onclick="api('run',{id:'examples'}).then(r=>r.n&&toast('Indexation lancee'))">Indexer les exemples pour l'IA</button><button class="btn small sec" title="${esc(JD('clone_all').desc)}" onclick="api('run',{id:'clone_all'}).then(r=>r.n&&toast('Clonage lance'))">Cloner les jumelles dans tous les jeux</button></div></div>
     <div class="card"><h3>Moteurs partages entre jeux</h3><p class="hint">Fonctions identiques entre deux jeux, hors SDK : du code moteur reutilise. Un match dans un jeu = gratuit dans l'autre (niveau "Portable").</p>
     <table><tr><th>Jeu A</th><th>Jeu B</th><th class="num">Moteur commun</th><th class="num">SDK commun</th></tr>
     ${d.pairs.slice(0, 40).map(p => `<tr><td>${esc(p.a)}</td><td>${esc(p.b)}</td><td class="num"><b>${fmt(p.engine)}</b></td><td class="num hint">${fmt(p.sdk)}</td></tr>`).join("")}</table></div></div>`;
@@ -462,8 +463,10 @@ function viewSettings() {
     <tr><td>Taches machine en parallele</td><td><input id="s-par" type="number" min="1" max="8" value="${s.max_parallel_jobs}"></td></tr>
     <tr><td>Modele Qwen (Ollama)</td><td><input id="s-model" value="${esc(s.qwen_model)}"></td></tr>
     <tr><td>Agents Qwen en parallele (par defaut)<div class="hint">Ollama doit avoir OLLAMA_NUM_PARALLEL &ge; ce nombre (variable d'environnement, puis redemarrer Ollama). Avec 16 Go de VRAM : environ 4 pour qwen9-ctx, 8 pour qwen-ctx (4b).</div></td><td><input id="s-agents" type="number" min="1" max="16" value="${s.qwen_agents}"></td></tr>
-    <tr><td>Minutes max par fonction (Qwen)<div class="hint">Seul le temps de generation compte : l'attente de son tour sur le GPU ne mange pas le temps d'une fonction.</div></td><td><input id="s-min" type="number" min="1" max="60" value="${s.qwen_minutes}"></td></tr>
+    <tr><td>Minutes max par fonction proche (Qwen, 2e passe)<div class="hint">Une 1re passe rapide (1,5 min) voit toutes les fonctions ; seules celles a 3 diffs ou moins ont droit a ce temps. Une fonction qui ne progresse plus s'arrete avant. Seul le temps de generation compte : l'attente de son tour sur le GPU ne mange pas le temps d'une fonction.</div></td><td><input id="s-min" type="number" min="1" max="60" value="${s.qwen_minutes}"></td></tr>
     <tr><td>Serveur du modele<div class="hint">llama.cpp : vraies requetes en parallele (une par agent), meme pour qwen3.5 qu'Ollama traite une par une. Demarre tout seul avec le fichier du modele deja telecharge par Ollama.</div></td><td><select id="s-backend"><option value="ollama" ${s.qwen_backend === "ollama" ? "selected" : ""}>Ollama</option><option value="openai" ${s.qwen_backend === "openai" ? "selected" : ""}>llama.cpp server (ou vLLM)</option></select> <input id="s-server" value="${esc(s.qwen_server)}" style="width:200px"></td></tr>
+    <tr><td>Petit modele pour les fonctions faciles<div class="hint">1re passe sur les petites fonctions presque bonnes (ex. qwen-ctx). Vide = toujours le modele principal.</div></td><td><input id="s-small" value="${esc(s.qwen_small_model || "")}"></td></tr>
+    <tr><td>Modele de la file difficile<div class="hint">pour les fonctions restees a 1-3 instructions pres (plus gros modele). Vide = le modele principal.</div></td><td><input id="s-hardm" value="${esc(s.qwen_hard_model || "")}"></td></tr>
     <tr><td>Publier les prises de blocs sur GitHub</td><td><input id="s-push" type="checkbox" ${s.push_claims ? "checked" : ""}></td></tr>
     <tr><td>Compte GitHub</td><td><input id="s-owner" value="${esc(s.github_owner)}" placeholder="rempli a la 1re publication"></td></tr></table>
     <div class="btns" style="margin-top:12px"><button class="btn" onclick="saveSettings()">Enregistrer</button></div></div>`;
@@ -471,6 +474,7 @@ function viewSettings() {
 async function saveSettings() {
   const r = await api("settings", {who: $("#s-who").value.trim(), max_parallel_jobs: +$("#s-par").value, qwen_model: $("#s-model").value.trim(),
     qwen_minutes: +$("#s-min").value, qwen_agents: +$("#s-agents").value, qwen_backend: $("#s-backend").value,
+    qwen_small_model: $("#s-small").value.trim(), qwen_hard_model: $("#s-hardm").value.trim(),
     qwen_server: $("#s-server").value.trim(), push_claims: $("#s-push").checked, github_owner: $("#s-owner").value.trim()});
   if (!r.error) { O.settings = r; toast("Reglages enregistres"); }
 }

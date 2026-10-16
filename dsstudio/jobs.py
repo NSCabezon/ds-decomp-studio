@@ -39,6 +39,11 @@ DEFS = {
               "de nos jeux : C copie + renomme, compile + compare, puis verify"),
     "clone_all": ("Cloner les jumelles dans tous les jeux", "global", 7200,
                   "le clonage dans chaque jeu (1 match dans un jeu = 1 match dans chaque jeu qui a la meme fonction)"),
+    "dataset": ("Exporter le jeu de donnees (LoRA)", "global", 120,
+                "paires assembleur -> C exact de tous les jeux, au format d'entrainement (datasets/*.jsonl)"),
+    "examples": ("Indexer les exemples pour l'IA", "global", 400,
+                 "les fonctions deja matchees de tous les jeux (assembleur -> C exact) : Qwen recoit les plus proches "
+                 "de chaque fonction comme exemples"),
     "donors_index": ("Indexer les decomps externes", "global", 1800,
                      "compile les depots de decomps-externes/ et met a jour donors.sqlite"),
     "names": ("Nommer (SDK, MSL...)", "game", 900,
@@ -115,8 +120,12 @@ def command(jid: str, game, p: dict) -> str:
         blocks = p.get("blocks") or p.get("block")
         if isinstance(blocks, list):
             blocks = ",".join(blocks)
+        # hard: the functions earlier runs left a few instructions away (build/qwen_auto/hard.json), for a bigger model
+        target = " --hard" if p.get("hard") else f" --blocks {_q(blocks)}"
+        small = p.get("small_model", s.get("qwen_small_model", ""))
         return (f"python {_q((config.WORKERS / 'qwen_block.py').as_posix())} --project {_q(game.path.as_posix())}"
-                f" --blocks {_q(blocks)} --model {_q(p.get('model') or s['qwen_model'])}"
+                f"{target} --model {_q(p.get('model') or (s.get('qwen_hard_model') if p.get('hard') else '') or s['qwen_model'])}"
+                + (f" --small-model {_q(small)}" if small and not p.get("hard") else "") +
                 f" --minutes {float(p.get('minutes') or s['qwen_minutes'])}"
                 f" --agents {int(p.get('agents') or s['qwen_agents'])} --max {int(p.get('max') or 0)}"
                 f" --batch {int(p.get('batch') or 10)}"
@@ -165,6 +174,10 @@ def command(jid: str, game, p: dict) -> str:
         if p.get("dry_run"):
             cmd += " --dry-run"
         return cmd + " && python tools/donor_match.py --list"
+    if jid == "examples":
+        return f"python {_q((config.WORKERS / 'examples.py').as_posix())} build"
+    if jid == "dataset":
+        return f"python {_q((config.WORKERS / 'dataset.py').as_posix())}"
     if jid == "donors_index":
         return "python tools/donors.py index"
     if jid in ("names", "regroup", "cleanup"):

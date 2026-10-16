@@ -15,6 +15,12 @@ reading the prompt is the slow part (qwen3.5 serves one request at a time):
   - with a server that answers one request at a time (Ollama + qwen3.5), 2 agents take turns: one compiles while
     the other generates, and the time limit only counts generation;
   - --backend openai: llama.cpp server (workers/llm_server.py, started on demand) or vLLM, real parallel requests.
+Time goes where it pays: a quick first pass on every function (--pass1-minutes), each one dropped after --plateau
+rounds without progress; then the close ones (--pass2-diffs) get other compilers/flags (sweep_profiles), the
+permuter in the background (--permute-at), and a long second pass (--minutes) with thinking for the closest
+(--think-at). Each round also tries, without the model, rule fixes and crossovers of the best candidates. Failed
+tries are kept between runs (build/qwen_auto/memory/), functions left 1-3 instructions away go to the "difficile"
+queue (build/qwen_auto/hard.json, `--hard` with a bigger model). Functions without a draft get one from m2c.
 Agents never touch the project: matches go to one
 integrator, which adds them in batches (src/auto/ + delinks.txt, clang-format), runs `match.py verify`, and
 commits (+ pushes) only if it passes; a failing batch is retried one function at a time.
@@ -39,7 +45,7 @@ from pathlib import Path
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--project", required=True, type=Path)
-ap.add_argument("--blocks", "--block", dest="blocks", required=True, help="block ids, comma separated")
+ap.add_argument("--blocks", "--block", dest="blocks", default="", help="block ids, comma separated (not needed with --hard)")
 ap.add_argument("--model", default="qwen9-ctx")
 ap.add_argument("--minutes", type=float, default=5.0, help="time limit per function")
 ap.add_argument("--agents", type=int, default=1, help="functions worked on at the same time")
@@ -53,6 +59,20 @@ ap.add_argument("--patch-size", type=int, default=400, help="functions from this
 ap.add_argument("--patch-lines", type=int, default=60, help="... or whose C has this many lines")
 ap.add_argument("--max-tokens", type=int, default=8192, help="cap of one answer")
 ap.add_argument("--compile-jobs", type=int, default=max(2, (os.cpu_count() or 4) // 2), help="compilers at once")
+ap.add_argument("--pass1-minutes", type=float, default=1.5,
+                help="first quick pass on every function; --minutes is the second pass, only for the close ones")
+ap.add_argument("--pass2-diffs", type=int, default=3, help="second pass for functions this close after the first")
+ap.add_argument("--plateau", type=int, default=4, help="stop a function after this many rounds without progress")
+ap.add_argument("--permute-at", type=int, default=4, help="give a function this close to the permuter (0 = never)")
+ap.add_argument("--permute-minutes", type=float, default=5.0, help="permuter time per function")
+ap.add_argument("--think-at", type=int, default=2, help="second pass: thinking mode for functions this close (0 = no)")
+ap.add_argument("--think-tokens", type=int, default=4096, help="extra tokens for the thinking")
+ap.add_argument("--small-model", default="", help="model for the easy functions of the first pass (e.g. qwen-ctx)")
+ap.add_argument("--hard", action="store_true",
+                help="work on the queue of functions left a few instructions away (build/qwen_auto/hard.json) "
+                     "instead of blocks, usually with a bigger --model")
+ap.add_argument("--examples", type=int, default=3,
+                help="matched functions with the closest code shown in the prompt (workers/examples.py index; 0 = none)")
 ap.add_argument("--backend", choices=["ollama", "openai"], default="ollama",
                 help="ollama, or openai = any OpenAI-compatible server (llama.cpp server, vLLM): real parallel requests")
 ap.add_argument("--server", default="http://127.0.0.1:8080", help="URL of the OpenAI-compatible server")
@@ -173,22 +193,24 @@ CODE_BLOCK = re.compile(r"```[a-zA-Z]*[ \t]*\n.*?```", re.S)
 OLLAMA = "http://127.0.0.1:11434"
 
 
-def ask(messages, temp, deadline, blocks=1, num_predict=2048) -> tuple[str, dict]:
+def ask(messages, temp, deadline, blocks=1, num_predict=2048, model=None, think=False) -> tuple[str, dict]:
     """The model's answer, read as it is written and cut as soon as `blocks` ```c blocks are closed: some models go on
     writing after the code (explanations, another version...) and would use the whole time of the function.
     blocks=0: read until the model stops (patch answers have no fixed number of blocks).
     Backends: Ollama (/api/chat) or any OpenAI-compatible server (llama.cpp server, vLLM: /v1/chat/completions).
     Also returns timings: `ttft` (seconds to the first token: reading the prompt, short when its start was cached),
-    `gen` (whole answer), and the server's own counts when it sends them (prompt tokens, cached tokens)."""
+    `gen` (whole answer), and the server's own counts when it sends them (prompt tokens, cached tokens).
+    think=True: the model reasons first (its reasoning is not part of the answer), for the last differences."""
+    model = model or args.model
     if args.backend == "openai":
-        body = {"model": args.model, "messages": messages, "stream": True, "temperature": temp,
+        body = {"model": model, "messages": messages, "stream": True, "temperature": temp,
                 "max_tokens": num_predict, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
                 "cache_prompt": True,  # llama.cpp: keep the KV cache of the prompt's start for the next request
-                "chat_template_kwargs": {"enable_thinking": False}}
+                "chat_template_kwargs": {"enable_thinking": bool(think)}}
         url = args.server.rstrip("/") + "/v1/chat/completions"
     else:
-        body = {"model": args.model, "messages": messages, "stream": True,
-                "options": {"temperature": temp, "num_predict": num_predict}, "think": False}
+        body = {"model": model, "messages": messages, "stream": True,
+                "options": {"temperature": temp, "num_predict": num_predict}, "think": bool(think)}
         url = OLLAMA + "/api/chat"
     req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
     text, t0, info = [], time.time(), {}
@@ -246,6 +268,50 @@ def unstatic(code, name):
     return re.sub(rf"(?<!\w)static\s+(?=[^;{{}}]*(?<!\w){re.escape(name)}\s*\()", "", code)
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompt_tools as pt  # noqa: E402
+
+_PROTOS = None
+_EXAMPLES = None
+_shared_lock = threading.Lock()
+
+
+def protos_text() -> str:
+    """include/m2c_protos.h + engine.h: real prototypes of matched functions, guessed ones (M2C_UNK) for the rest."""
+    global _PROTOS
+    with _shared_lock:
+        if _PROTOS is None:
+            _PROTOS = "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                                for p in (ROOT / "include" / "m2c_protos.h", ROOT / "include" / "engine.h") if p.exists())
+    return _PROTOS
+
+
+def similar_examples(fn, n: int) -> str:
+    """The n matched functions (all our games, workers/examples.py index) whose instructions are closest."""
+    global _EXAMPLES
+    if n <= 0:
+        return ""
+    with _shared_lock:
+        if _EXAMPLES is None:
+            try:
+                import examples
+                _EXAMPLES = examples.Examples() if examples.DB.exists() else False
+                if not _EXAMPLES:
+                    log("(pas d'exemples : lancer `python workers/examples.py build`)")
+            except Exception as e:
+                log(f"(exemples indisponibles : {e})")
+                _EXAMPLES = False
+    if not _EXAMPLES:
+        return ""
+    found = _EXAMPLES.similar(pt.mnemonic_list(fn.target_lines()), fn.size, ROOT.name, fn.name, n)
+    out = []
+    for k, (s, (game, name, size, _mn, asm, c)) in enumerate(found, 1):
+        same = " -- SAME instructions as the target: only names/constants may differ" if s >= 0.999 else ""
+        out.append(f"Example {k}: {name} from {game} ({size} bytes, similarity {s:.2f}{same})\n```\n{asm}\n```\n"
+                   f"```c\n{c.strip()}\n```")
+    return "\n\n".join(out)
+
+
 CODEMAP = None
 _codemap_lock = threading.Lock()
 
@@ -289,9 +355,15 @@ class Fn:
 
     def __init__(self, name, size, addr, src):
         self.name, self.size, self.addr = name, size, addr
-        self.best, self.out, self.score, self.profile = src, "", 10**6, None
+        self.best, self.out, self.score, self.profile = src, "", (10**6, 10**6), None
+        self.lines = []  # disassembly of what the best file compiles to
+        self.pop: list[tuple[tuple[int, int], str]] = []  # the best different candidates (genetic crossover)
+        self.stale = 0  # rounds without progress (plateau)
+        self.tried: set[str] = set()  # hashes of every file compiled for it (this run and earlier ones: memory)
+        self.permuting = False
+        self.sessions, self.diff, self.easy, self.no_think = 0, 0.0, False, False
         self.notes, self.context, self.source = [], "", None  # source: the matching C, once found
-        self._target, self._target_lines, self._asm = None, None, None
+        self._target, self._target_lines, self._asm, self._fixed = None, None, None, None
 
     @property
     def patch_mode(self) -> bool:
@@ -311,27 +383,53 @@ class Fn:
             self._target_lines = pc.disasm(self.target, self.addr)
         return self._target_lines
 
-    def fixed(self) -> str:
-        """The part of the prompt that never changes for this function (first, so the server reuses its cache)."""
+    def fixed(self, examples: int | None = None) -> str:
+        """The part of the prompt that never changes for this function (first, so the server reuses its cache):
+        context, exact prototypes of what it calls, matched functions with the closest code, target assembly."""
+        if self._fixed is not None:
+            return self._fixed
         if self._asm is None:
             import auto_match as am
             self._asm = am.function_asm(self.name) or "\n".join(self.target_lines())
-        context = f"Context (where this code comes from):\n{self.context}\n\n" if self.context else ""
-        return f"{context}Target assembly of {self.name} (the original function):\n```\n{self._asm.strip()}\n```"
+        parts = [f"Context (where this code comes from):\n{self.context}"] if self.context else []
+        protos = pt.prototypes(self._asm, protos_text(), self.name)
+        if protos:
+            parts.append("Prototypes of the functions it calls (use them as they are: the return type and the argument "
+                         "types change the code):\n" + "\n".join(protos))
+        ex = similar_examples(self, args.examples if examples is None else examples)
+        if ex:
+            parts.append("Matched functions whose code is close (their assembly, then the C that compiles to it "
+                         "EXACTLY with this compiler): reuse their style, types and loop forms.\n" + ex)
+        parts.append(f"Target assembly of {self.name} (the original function):\n```\n{self._asm.strip()}\n```")
+        self._fixed = "\n\n".join(parts)
+        return self._fixed
 
     def varying(self, room: int) -> str:
-        """What changes at each try (last): the best file so far, what it compiles to, the failed tries."""
+        """What changes at each try (last): the best file so far, the part of its assembly that differs, hints read
+        from the difference, the failed tries."""
         extra = ("\n\nAlready tried from this file, all worse or equal (do something different):\n" +
                  "\n".join(self.notes[-6:])) if self.notes else ""
-        return (f"Current best file for {self.name}:\n```c\n{self.best}```\n\n"
-                f"Compiler result of this file (TARGET | CANDIDATE, * = differs):\n{self.out[-room:]}{extra}")
+        last = self.out.strip().splitlines()[-1] if self.out.strip() else ""
+        if self.lines:
+            diff = pt.compact_diff(self.target_lines(), self.lines)[:room]
+            hint = pt.hints(self.target_lines(), self.lines)
+            result = (f"{last} ; edit distance {self.score[1]} (instructions to add/remove/change: lower is closer)\n"
+                      f"Where it differs (TARGET | CANDIDATE, * = differs, ... = identical lines):\n{diff}")
+            if hint:
+                result += "\nHints:\n" + "\n".join(f"- {t}" for _k, t in hint[:4])
+        else:  # compile error, or the function is not in the object: the compiler's message
+            result = self.out[-room:]
+        return f"Current best file for {self.name}:\n```c\n{self.best}```\n\nCompiler result of this file: {result}{extra}"
+
+    def strategy_keys(self) -> list[tuple[str, str]]:
+        return pt.hints(self.target_lines(), self.lines) if self.lines else []
 
 
 COMPILE_POOL = ThreadPoolExecutor(max_workers=max(1, args.compile_jobs))
 GEN = threading.Semaphore(1)  # turns on the model server (main() sets the number of requests it serves at once)
 
 
-def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool, str]]:
+def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool, str, list[str]]]:
     """Compiles every version of one function in ONE compiler call (the compiler takes about a second to start,
     almost nothing per file), in this process (no probe_compiler.py subprocess per try). Same output as
     `probe_compiler.py --show`: side-by-side disassembly, then `<version> | -O4,p: N/M diff`."""
@@ -339,7 +437,10 @@ def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool,
     import probe_compiler as pc
     version, _, extra = profile.partition(" ")
     mwcc = am.MWCC_ROOT / version / "mwccarm.exe"
-    out: dict[int, tuple[bool, str]] = {}
+    opt = FLAGS
+    if re.search(r"(^|\s)-O\d", extra):  # a profile with its own optimization level (found by sweep_profiles)
+        opt, extra = "", extra
+    out: dict[int, tuple[bool, str, list[str]]] = {}
     with tempfile.TemporaryDirectory(dir=WORK) as tmp:
         t = Path(tmp)
         (t / "objs").mkdir()
@@ -348,11 +449,11 @@ def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool,
         pending = list(range(len(codes)))
         while pending:
             files = " ".join(f"v{i}.c" for i in pending)
-            cmd = f'"{mwcc}" {FLAGS} {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c {files} -o objs'
+            cmd = f'"{mwcc}" {opt} {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c {files} -o objs'
             r = am.run_limited(cmd, cwd=t, shell=True, timeout=30 + len(pending))
             if r.stderr == "timeout":
                 for i in pending:
-                    out[i] = (False, f"{version:14} | {FLAGS}: compile error (timeout)")
+                    out[i] = (False, f"{version:14} | {FLAGS}: compile error (timeout)", [])
                 break
             missing = [i for i in pending if not (t / "objs" / f"v{i}.o").exists()]
             for i in pending:
@@ -360,31 +461,223 @@ def compile_versions(fn: Fn, codes: list[str], profile: str) -> list[tuple[bool,
                     continue
                 cand = pc.compiled_function(t / "objs" / f"v{i}.o", fn.name)
                 if cand is None:
-                    out[i] = (False, f"{version:14} | {FLAGS}: function not found")
+                    out[i] = (False, f"{version:14} | {FLAGS}: function not found", [])
                     continue
                 bad, n = pc.compare(fn.target, cand)
                 tag = "MATCH" if bad == 0 else f"{bad}/{n} diff" + ("" if len(cand) == fn.size else f" (size 0x{len(cand):x})")
-                out[i] = (bad == 0, ("" if bad == 0 else side_by_side(fn, cand) + "\n") + f"{version:14} | {FLAGS}: {tag}")
+                out[i] = (bad == 0, f"{version:14} | {FLAGS}: {tag}", [] if bad == 0 else pc.disasm(cand, fn.addr))
             if not missing:
                 break
             # the compiler stops at the first file with an error: that one failed, the next ones were not compiled
             err = "\n".join((r.stdout + r.stderr).strip().splitlines()[:12])
-            out[missing[0]] = (False, f"{err}\n{version:14} | {FLAGS}: compile error")
+            out[missing[0]] = (False, f"{err}\n{version:14} | {FLAGS}: compile error", [])
             pending = missing[1:]
-    return [out.get(i, (False, f"{version:14} | {FLAGS}: compile error")) for i in range(len(codes))]
+    return [out.get(i, (False, f"{version:14} | {FLAGS}: compile error", [])) for i in range(len(codes))]
 
 
-def side_by_side(fn: Fn, cand: bytes) -> str:
-    import probe_compiler as pc
-    t, c = fn.target_lines(), pc.disasm(cand, fn.addr)
-    rows = [f"     {'TARGET':38} | CANDIDATE"]
-    for i in range(max(len(t), len(c))):
-        a, b = (t[i] if i < len(t) else ""), (c[i] if i < len(c) else "")
-        rows.append(f"   {' ' if a == b else '*'} {a:38} | {b}")
-    return "\n".join(rows)
+PROFILE_FLAGS = ["-O4,s", "-O3", "-O2", "-O4,p -inline auto", "-O4,p -inline on,noauto"]
 
 
-def probe_many(cands: list[tuple["Fn", str, str]]) -> list[tuple[bool, str]]:
+def sweep_profiles(fn: Fn) -> tuple[str, str, list[str], tuple[int, int]] | None:
+    """A function stuck at a few differences may be built with another compiler or other flags, not need other C:
+    the best file is compiled with every mwccarm version of tools/mwccarm and a few flag sets. Returns
+    (profile, output, lines, rank) of the best result if it is better than the current one, else None."""
+    import auto_match as am
+    versions = sorted(p.parent.relative_to(am.MWCC_ROOT).as_posix() for p in am.MWCC_ROOT.glob("[12]*/*/mwccarm.exe"))
+    profiles = [v for v in versions if v != fn.profile.split(" ")[0]]
+    profiles += [f"{v} {fl}" for v in versions for fl in PROFILE_FLAGS]
+    if "1.2/sp2p3" in versions:
+        profiles.append("1.2/sp2p3 -proc arm7tdmi")
+    res = probe_many([(fn, fn.best, p) for p in profiles])
+    best = None
+    for p, (ok, out, lines) in zip(profiles, res):
+        r = rank(fn, out, lines) if not ok else (0, 0)
+        if r < fn.score and (best is None or r < best[3]):
+            best = (p, out, lines, r)
+    return best
+
+
+_ZONES = None
+
+
+def zone_profile(addr: int) -> str | None:
+    """The compiler of the matched files around this address (compilers.txt): a library is built with one compiler
+    and linked in one piece, so its neighbours tell which one to try first."""
+    global _ZONES
+    import auto_match as am
+    with _shared_lock:
+        if _ZONES is None:
+            prof = {}
+            if am.COMPILERS_TXT.exists():
+                for line in am.COMPILERS_TXT.read_text(encoding="utf-8").splitlines():
+                    if line.strip() and not line.startswith("#"):
+                        p, _, v = line.partition(" ")
+                        prof[p] = v.strip()
+            text = am.DELINKS.read_text(encoding="utf-8").split("\n\n", 1)[-1]
+            _ZONES = sorted((int(a, 16), prof.get(f, "")) for f, a in
+                            re.findall(r"^(src/\S+):\n\s+complete\n\s+\.text\s+start:0x([0-9a-f]+)", text, re.M))
+    import bisect
+    i = bisect.bisect_left(_ZONES, (addr, ""))
+    near = [_ZONES[j][1] for j in (i - 1, i) if 0 <= j < len(_ZONES)]
+    if near and all(n and n == near[0] for n in near):
+        return near[0]
+    return None
+
+
+FLOAT_CALL = re.compile(r"\bbl\s+_{1,2}(?:f|d)(?:add|sub|mul|div|cmp|eq|ne|lt|le|ge|gt|fix|flt|ltod|dtof|2d|2f|sqrt)\w*")
+
+
+def difficulty(fn: Fn) -> float:
+    """Expected effort, lower first: size, starting differences, switch tables, float runtime calls, calls."""
+    asm = fn._asm or ""
+    lines = fn.target_lines()
+    d = len(lines) + 3 * min(fn.score[0], 300)
+    if re.search(r"(addls|ldrls)\s+pc", "\n".join(lines)):
+        d += 40  # switch: jump tables are hard to reproduce
+    d += 25 * len(FLOAT_CALL.findall(asm))
+    d += 3 * len(re.findall(r"^\s+blx?\s", asm, re.M))
+    return d
+
+
+TYPE_FLIP = {"s8": "u8", "u8": "s8", "s16": "u16", "u16": "s16", "s32": "u32", "u32": "s32"}
+DECL = re.compile(r"^(\s+)(s8|u8|s16|u16|s32|u32)(\s+\**\s*\w+)", re.M)
+
+
+def rule_variants(fn: Fn) -> list[str]:
+    """Fixes tried without the model on the best file: the m2c corrections of auto_match (returned value, loops,
+    struct copies...), then the transformations the difference points at: signedness of each local variable
+    (types hint), swapping two neighbouring declarations (only registers differ)."""
+    import auto_match as am
+    out = []
+    try:
+        out += am.variants(fn.best, fn.name)
+    except Exception:
+        pass
+    keys = {k for k, _t in fn.strategy_keys()}
+    decls = list(DECL.finditer(fn.best))
+    if "types" in keys or not keys:
+        for m in decls[:8]:
+            out.append(fn.best[:m.start(2)] + TYPE_FLIP[m.group(2)] + fn.best[m.end(2):])
+    if "order" in keys:
+        lines = fn.best.split("\n")
+        idx = [fn.best[:m.start()].count("\n") for m in decls]
+        for a, b in zip(idx, idx[1:]):
+            if b == a + 1:
+                swapped = list(lines)
+                swapped[a], swapped[b] = swapped[b], swapped[a]
+                out.append("\n".join(swapped))
+    return out[:24]
+
+
+def crossover(fn: Fn, limit: int = 8) -> list[str]:
+    """Children of the best candidates: the best file with one differing part taken from another good candidate
+    (each part of a diff hunk by hunk). Keeps ideas that were right in a candidate that was worse overall."""
+    if len(fn.pop) < 2:
+        return []
+    base = fn.pop[0][1].split("\n")
+    out = []
+    for _r, other in fn.pop[1:4]:
+        o = other.split("\n")
+        for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base, o, autojunk=False).get_opcodes():
+            if op != "equal":
+                out.append("\n".join(base[:i1] + o[j1:j2] + base[i2:]))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def remember(fn: Fn, code: str, r: tuple[int, int]) -> None:
+    """Keeps the 6 best different candidates (population for crossover)."""
+    if any(c == code for _r, c in fn.pop):
+        return
+    fn.pop.append((r, code))
+    fn.pop.sort(key=lambda x: x[0])
+    del fn.pop[6:]
+
+
+def code_hash(code: str) -> str:
+    import hashlib
+    return hashlib.sha1(re.sub(r"\s+", " ", code).strip().encode()).hexdigest()[:16]
+
+
+MEMORY = WORK / "memory"
+
+
+def load_memory(fn: Fn) -> None:
+    """What earlier runs learned about this function: their best file (when better than the draft), their failed
+    tries (told to the model, and never compiled again)."""
+    p = MEMORY / f"{fn.name}.json"
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    fn.tried |= set(m.get("tried", []))
+    fn.notes = m.get("notes", [])[-6:]
+    fn.sessions = m.get("sessions", 0)
+    if m.get("best") and tuple(m.get("score", (10**6, 10**6))) < fn.score:
+        fn.best, fn.profile = m["best"], m.get("profile") or fn.profile
+
+
+def save_memory(fn: Fn) -> None:
+    MEMORY.mkdir(parents=True, exist_ok=True)
+    p = MEMORY / f"{fn.name}.json"
+    try:
+        old = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        old = {}
+    keep_old = old.get("best") and tuple(old.get("score", (10**6, 10**6))) <= fn.score
+    data = {"best": old["best"] if keep_old else fn.best, "score": old["score"] if keep_old else list(fn.score),
+            "profile": old.get("profile") if keep_old else fn.profile, "notes": (old.get("notes", []) + fn.notes)[-12:],
+            "tried": sorted(fn.tried)[-2000:], "sessions": old.get("sessions", 0) + 1, "t": time.time()}
+    p.write_text(json.dumps(data), encoding="utf-8")
+
+
+PERMUTE_POOL = ThreadPoolExecutor(max_workers=1)  # the permuter uses many cores: one function at a time
+
+
+def permute(fn: Fn, on_match) -> None:
+    """The permuter finishes what the model started: it is better at register allocation and statement order.
+    Runs on the CPU in the background while the model works on other functions. Only for the default compiler
+    (tools/permute.py builds with it)."""
+    if fn.permuting or args.permute_minutes <= 0 or fn.profile.split(" ")[0] != "2.0/sp1p5" or \
+            not (ROOT / "tools" / "permute.py").exists():
+        return
+    fn.permuting = True
+    src = WORK / "permute" / f"{fn.name}.c"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(fn.best, encoding="utf-8", newline="\n")
+    best_score = fn.score[0]
+
+    def job():
+        out_dir = ROOT / "build" / "permuter" / fn.name
+        shutil.rmtree(out_dir, ignore_errors=True)
+        log(f"{fn.name}: permuter {args.permute_minutes:g} min sur le meilleur fichier ({best_score} diffs)")
+        run([sys.executable, "tools/permute.py", fn.name, "--source", str(src), "--minutes", str(args.permute_minutes),
+             "-j", str(max(1, (os.cpu_count() or 4) // 2))])
+        found = sorted(out_dir.glob("output-0-*"))
+        if found:
+            log(f"{fn.name}: MATCH par le permuter -> file d'integration")
+            on_match(fn, (found[0] / "source.c").read_text(encoding="utf-8"))
+        else:
+            log(f"{fn.name}: le permuter n'a pas fini ({best_score} diffs)")
+    PERMUTE_POOL.submit(job)
+
+
+def make_drafts(names: list[str]) -> None:
+    """Functions without a starting point get an m2c draft (tools/draft.py -> build/drafts/), instead of being
+    skipped."""
+    if not names or not (ROOT / "tools" / "draft.py").exists():
+        return
+    for k in range(0, len(names), 40):
+        run([sys.executable, "tools/draft.py", *names[k:k + 40]])
+
+
+def rank(fn: Fn, out: str, lines: list[str]) -> tuple[int, int]:
+    """(differing instructions, edit distance): the second part sees progress the first one misses."""
+    return score(out), (pt.edit_distance(fn.target_lines(), lines) if lines else 10**6)
+
+
+def probe_many(cands: list[tuple["Fn", str, str]]) -> list[tuple[bool, str, list[str]]]:
     """Compiles [(fn, code, profile)]: one compiler call per (function, compiler), those calls in parallel.
     Returns [(match, probe output)] in the same order."""
     groups: dict[tuple[int, str], list[int]] = {}
@@ -469,28 +762,42 @@ def parse_group(reply: str, fns: list[Fn]) -> dict[str, list[str]]:
     return out
 
 
-def request(fns: list[Fn], temp: float, deadline: float) -> tuple[dict[str, list[str]], dict]:
+def plan(fns: list[Fn], rnd: int, n: int) -> str:
+    """One angle per version (the hints' angles first, then a rotation that moves at each round): the versions of
+    one answer try different things instead of the same idea at a higher temperature."""
+    hints = [h for f in fns for h in f.strategy_keys()]
+    steps = pt.pick_strategies(hints, rnd, n)
+    who = "every function" if len(fns) > 1 else "the file"
+    return (f"\n\nWhat each version must do (version 1 = first line, ...; apply it to {who}):\n"
+            + "\n".join(f"{k}. {s}" for k, s in enumerate(steps, 1)))
+
+
+def request(fns: list[Fn], temp: float, deadline: float, rnd: int = 0, model: str | None = None,
+            think: bool = False) -> tuple[dict[str, list[str]], dict]:
     """One request to the model for these functions: ({function: [candidate C files]}, timings).
-    The prompt starts with what never changes (rules, target assembly, context) and ends with what changes at each
-    try (best file, its result, failed tries): the server keeps the start in its cache and only reads the end."""
+    The prompt starts with what never changes (rules, examples, prototypes, target assembly, context) and ends with
+    what changes at each try (best file, the differing part, hints, failed tries, the angle of each version): the
+    server keeps the start in its cache and only reads the end."""
     v = max(1, args.variants)
     if len(fns) > 1:
         n = max(1, args.group_variants)
         system = RULES + FMT_GROUP.format(n=n)
-        user = ("\n\n".join(f"### {f.name}\n{f.fixed()}" for f in fns) + "\n\n----- current state -----\n\n"
-                + "\n\n".join(f"### {f.name}\n{f.varying(2500)}" for f in fns))
+        user = ("\n\n".join(f"### {f.name}\n{f.fixed(min(args.examples, 1))}" for f in fns)
+                + "\n\n----- current state -----\n\n" + "\n\n".join(f"### {f.name}\n{f.varying(2500)}" for f in fns)
+                + plan(fns, rnd, n))
         blocks, predict = n * len(fns), sum(n * (len(f.best) // 3 + 150) for f in fns)
     elif fns[0].patch_mode:
         # room for the edits, or for one whole file when the model writes that instead
         f = fns[0]
-        system, user, blocks = RULES + FMT_PATCH.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}", 0
+        system, user, blocks = RULES + FMT_PATCH.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}{plan(fns, rnd, v)}", 0
         predict = max(700 * v, len(f.best) // 3 + 400)
     else:
         f = fns[0]
-        system, user = RULES + FMT_FULL.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}"
+        system, user = RULES + FMT_FULL.format(n=v), f"{f.fixed()}\n\n{f.varying(6000)}{plan(fns, rnd, v)}"
         blocks, predict = v, v * (len(f.best) // 3 + 150)
+    predict = max(1024, min(args.max_tokens, predict)) + (args.think_tokens if think else 0)
     reply, info = ask([{"role": "system", "content": system}, {"role": "user", "content": user}], temp, deadline,
-                      blocks=blocks, num_predict=max(1024, min(args.max_tokens, predict)))
+                      blocks=blocks, num_predict=predict, model=model, think=think)
     try:  # the last raw answer, to see what the model writes when versions go missing
         (WORK / "last_reply.txt").write_text(reply, encoding="utf-8")
     except OSError:
@@ -514,36 +821,59 @@ def request(fns: list[Fn], temp: float, deadline: float) -> tuple[dict[str, list
     return out, info
 
 
-def solve(unit: list[Fn]) -> None:
-    """Works on one function or a batch of small ones until each matches or the time is out (minutes per function).
-    Each request asks for several versions; every version is compiled, the best one becomes the new base.
+def solve(unit: list[Fn], minutes: float, plateau: int, final: bool = False) -> None:
+    """Works on one function or a batch of small ones until each matches, stops progressing (plateau: `plateau`
+    rounds in a row without a better score) or its time is out (`minutes` per function).
+    Each round: one request for several versions (each with its own angle), then, without the model, the rule
+    fixes and crossovers of the best candidates; everything is compiled, the best file is the next base. Files
+    already compiled for this function (this run or earlier ones: memory) are never compiled again.
     The time limit counts only the model's work for this unit: with a server that answers one request at a time,
-    agents take turns on it (GEN) and one agent compiles while another one generates; waiting for the turn costs
-    nothing. A wall clock limit (3x) still ends a unit that never gets its turn."""
-    budget = args.minutes * 60 * len(unit)
+    agents take turns on it (GEN); waiting for the turn costs nothing. A wall clock limit (3x) still applies.
+    final=True (second pass, functions a few instructions away): thinking mode for the closest ones."""
+    budget = minutes * 60 * len(unit)
     used, wall_end = 0.0, time.time() + 3 * budget + 120
     pending, empty, rnd = list(unit), 0, 0
     while pending and used < budget and time.time() < wall_end and not STOP.exists():
         rnd += 1
-        temp = min(1.0, 0.5 + 0.05 * max(len(f.notes) for f in pending))
+        # the angle of each version brings the variety now; the temperature only rises a little when stuck
+        temp = min(0.9, 0.6 + 0.03 * max(len(f.notes) for f in pending))
+        think = final and args.think_at > 0 and all(f.score[0] <= args.think_at and not f.no_think for f in pending)
+        model = args.model
+        if args.small_model and not final and all(f.easy for f in pending):
+            model = args.small_model
         try:
             with GEN:
                 t0 = time.time()
                 try:
-                    cands, info = request(pending, temp, t0 + budget - used)
+                    cands, info = request(pending, temp, t0 + budget - used, rnd, model=model, think=think)
                 finally:
                     used += time.time() - t0
         except Exception as e:
             if isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError) \
                     or "timed out" in str(e) or "10060" in str(e):  # 10060: Windows timeout, message translated
-                log(f"  {', '.join(f.name for f in pending)}: limite de temps atteinte pendant une reponse d'Ollama")
+                log(f"  {', '.join(f.name for f in pending)}: limite de temps atteinte pendant une reponse du modele")
             else:
-                log(f"  Ollama ne repond pas ({e}) : lancez Ollama")
+                log(f"  le serveur du modele ne repond pas ({e})")
             return
-        todo = [(f, c, f.profile) for f in pending for c in cands.get(f.name, [])]
+        model_gave = any(cands.get(f.name) for f in pending)
+        # without the model: rule fixes and crossovers of the best candidates
+        for f in pending:
+            cands.setdefault(f.name, [])
+            cands[f.name] += rule_variants(f) + crossover(f)
+        todo = []
+        for f in pending:
+            for c in dict.fromkeys(cands.get(f.name, [])):
+                h = code_hash(c)
+                if h not in f.tried:
+                    f.tried.add(h)
+                    todo.append((f, c, f.profile))
+        if think and not model_gave:
+            for f in pending:  # the reasoning used every token: no more thinking for these
+                f.no_think = True
+            log("  reflexion trop longue (aucun code dans la reponse) : la suite sans reflexion")
         if not todo:
             empty += 1
-            log(f"  reponse sans code utilisable ({empty}/3)")
+            log(f"  reponse sans code nouveau ({empty}/3)")
             if empty >= 3:
                 return
             continue
@@ -551,26 +881,38 @@ def solve(unit: list[Fn]) -> None:
         tc = time.time()
         results = probe_many(todo)
         cached = f", {info['cached']} en cache" if info.get("cached") else ""
-        log(f"  tour {rnd}: 1er token {info.get('ttft', 0):.1f}s{cached}, reponse {info.get('gen', 0):.1f}s, "
+        log(f"  tour {rnd}{' (reflexion)' if think else ''}{' [' + model + ']' if model != args.model else ''}: "
+            f"1er token {info.get('ttft', 0):.1f}s{cached}, reponse {info.get('gen', 0):.1f}s, "
             f"{len(todo)} versions compilees en {time.time() - tc:.1f}s")
         for f in list(pending):
-            mine = [(score(out), ok, code, out) for (g, code, _p), (ok, out) in zip(todo, results) if g is f]
+            mine = [(rank(f, out, lines), ok, code, out, lines)
+                    for (g, code, _p), (ok, out, lines) in zip(todo, results) if g is f]
             if not mine:
                 continue
-            s, ok, code, out = min(mine, key=lambda r: r[0])
-            log(f"  {f.name} tour {rnd}: {len(mine)} versions, meilleure {out.strip().splitlines()[-1][-50:] if out.strip() else '?'}"
-                f" (avant {f.score})")
+            s, ok, code, out, lines = min(mine, key=lambda r: r[0])
+            last = out.strip().splitlines()[-1][-50:] if out.strip() else "?"
+            log(f"  {f.name} tour {rnd}: {len(mine)} versions, meilleure {last}, distance "
+                f"{s[1] if s[1] < 10**6 else '-'} (avant {f.score[0]}/{f.score[1] if f.score[1] < 10**6 else '-'})")
             if ok:
                 f.source = code
                 pending.remove(f)
                 continue
-            for s2, _ok, c2, _o in mine:
+            for s2, _ok, c2, _o, l2 in mine:
+                if s2[0] < 10000:
+                    remember(f, c2, s2)
                 if s2 >= f.score:
                     changed = [l[1:] for l in difflib.unified_diff(f.best.splitlines(), c2.splitlines(), lineterm="", n=0)
                                if l[:1] in "+-" and l[:3] not in ("+++", "---")][:6]
-                    f.notes.append(f"- change {changed} -> score {s2}"[:400])
+                    what = "does not compile" if s2[0] >= 10000 else f"{s2[0]} differing, distance {s2[1]}"
+                    f.notes.append(f"- change {changed} -> {what}"[:400])
             if s < f.score:
-                f.best, f.out, f.score, f.notes = code, out, s, []
+                f.best, f.out, f.score, f.lines, f.notes, f.stale = code, out, s, lines, [], 0
+            else:
+                f.stale += 1
+                if f.stale >= plateau:
+                    log(f"  {f.name}: plus de progres depuis {f.stale} tours ({f.score[0]} diffs) : arret, le temps "
+                        "va aux autres")
+                    pending.remove(f)
 
 
 def integrate_and_verify(found):
@@ -658,6 +1000,26 @@ def multiply(names: list[str]) -> list[str]:
     return added
 
 
+def preclone(names: list[str]) -> None:
+    """Before any AI: the block's functions whose code is already matched elsewhere (in this game, or in another of
+    our projects) are copied by tools/clone_match.py, in seconds. A model can spend an hour on a function that is
+    an exact twin of one matched in another game (e.g. scalbn, MIi_CpuCopy16)."""
+    if not names or not (ROOT / "tools" / "clone_match.py").exists():
+        return
+    emit = WORK / "preclone.json"
+    emit.unlink(missing_ok=True)
+    run([sys.executable, "tools/clone_match.py", "--other-games", "--names", ",".join(names), "--emit", str(emit)])
+    clones = [tuple(c) for c in json.loads(emit.read_text(encoding="utf-8"))] if emit.exists() else []
+    if not clones:
+        return
+    log(f"{len(clones)} fonction(s) des blocs ont une jumelle deja matchee : copiees sans IA, verification...")
+    if integrate_and_verify(clones):
+        commit_names([c[0] for c in clones], "clone_match")
+        log(f"CLONES INTEGRES + VERIFY PASSED : {', '.join(c[0] for c in clones)}")
+    else:
+        log("les clones compilent mais VERIFY echoue une fois integres (annules) : Qwen les essaiera")
+
+
 class Integrator(threading.Thread):
     """Single writer of the project: batches of matches -> verify -> commit. Failing batches are split."""
 
@@ -666,6 +1028,11 @@ class Integrator(threading.Thread):
         self.q, self.won, self.lost, self.extra = queue.Queue(), [], [], []
 
     def flush(self, batch):
+        import auto_match as am
+        covered = am.covered_ranges()
+        batch = [f for f in batch if not any(a <= f[2] < e for a, e in covered)]  # cloned meanwhile: already in
+        if not batch:
+            return
         if integrate_and_verify(batch):
             commit(batch)
             self.won += batch
@@ -763,8 +1130,36 @@ def ensure_ollama(wait: float = 90) -> bool:
     return False
 
 
+HARD = WORK / "hard.json"
+
+
+def prepare(fns: list[Fn], profiles: list[str]) -> None:
+    """Starting point of each function: memory of earlier runs, the compiler of its address zone first, both
+    default compilers, all compiled at once; then its context and expected difficulty."""
+    for f in fns:
+        load_memory(f)
+    tries = {f.name: list(dict.fromkeys([p for p in [f.profile, zone_profile(f.addr)] if p] + profiles)) for f in fns}
+    cands = [(f, f.best, p) for f in fns for p in tries[f.name]]
+    res = probe_many(cands)
+    for f in fns:
+        mine = [(rank(f, out, lines), p, out, lines) for (g, _c, p), (_ok, out, lines) in zip(cands, res) if g is f]
+        f.score, f.profile, f.out, f.lines = min(mine, key=lambda r: r[0])
+        f.tried.add(code_hash(f.best))
+        if f.score[0] < 10000:
+            remember(f, f.best, f.score)
+        f.context = code_context(f.name)
+        f.fixed()  # target assembly, used by difficulty()
+        f.diff = difficulty(f)
+        f.easy = f.size <= args.group_size and f.score[0] <= 6
+        if f.score[0] == 0:
+            f.source = f.best
+
+
 def main():
-    blocks = {b["id"]: b for b in json.loads((ROOT / ".studio" / "blocks.json").read_text(encoding="utf-8"))["blocks"]}
+    if not args.hard and not BLOCKS:
+        sys.exit("donner --blocks (ou --hard pour la file des fonctions presque matchees)")
+    blocks = {b["id"]: b for b in json.loads((ROOT / ".studio" / "blocks.json").read_text(encoding="utf-8"))["blocks"]} \
+        if BLOCKS else {}
     missing = [b for b in BLOCKS if b not in blocks]
     if missing:
         sys.exit(f"blocs introuvables dans .studio/blocks.json : {missing}")
@@ -776,22 +1171,25 @@ def main():
         m = re.match(r"^(\S+)\s+kind:function\((arm|thumb),size=0x([0-9a-f]+)\).*addr:0x([0-9a-f]+)", line)
         if m:
             syms[m.group(1)] = (int(m.group(4), 16), int(m.group(3), 16), m.group(2))
+    hard = json.loads(HARD.read_text(encoding="utf-8")) if HARD.exists() else {}
+    if args.hard:
+        names = [n for n in hard if n in syms]
+    else:
+        names = [n for b in BLOCKS for n in blocks[b]["functions"] if n in syms]
+        preclone(names)
     covered = am.covered_ranges()
-    profiles = [c[0] for c in am.COMPILERS[:2]]
+    names = [n for n in names if syms[n][2] == "arm" and not any(a <= syms[n][0] < e for a, e in covered)]
+    no_draft = [n for n in names if not starting_draft(n) and n not in hard]
+    if no_draft:
+        log(f"{len(no_draft)} fonction(s) sans brouillon : brouillon m2c (tools/draft.py)")
+        make_drafts(no_draft)
     todo = []
-    for b in BLOCKS:
-        for name in blocks[b]["functions"]:
-            if name not in syms:
-                continue
-            addr, size, mode = syms[name]
-            if mode != "arm" or any(a <= addr < e for a, e in covered):
-                continue
-            src = starting_draft(name)
-            if src:
-                todo.append((name, size, addr, src))
-    # Worth the most matches first (same code in other games + clones here), then smallest first (they match most
-    # often). One function per family of clones: once it matches, clone_match makes the others; the rest of the
-    # family comes after, in case the first one fails.
+    for n in names:
+        src = hard[n]["best"] if args.hard and n in hard else starting_draft(n)
+        if src:
+            todo.append((n, syms[n][1], syms[n][0], src))
+    # Worth the most matches first (same code in other games + clones here). One function per family of clones:
+    # once it matches, clone_match makes the others; the rest of the family comes after.
     weight, first = {}, {}
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -801,17 +1199,8 @@ def main():
         first = {n: row.get("first", n) for n, row in studio_games.clone_families(g).items()}
     except Exception as e:
         log(f"(ordre par jumelles indisponible : {e})")
-    seen = set()
-
-    def order(t):
-        rep = first.get(t[0], t[0])
-        later = rep in seen  # another function of the same family comes first
-        seen.add(rep)
-        return (later, -weight.get(t[0], 0), t[1])
-    todo.sort(key=lambda t: t[1])
-    todo.sort(key=order)
     if args.max:
-        todo = todo[:args.max]
+        todo = sorted(todo, key=lambda t: (-weight.get(t[0], 0), t[1]))[:args.max]
     global GEN
     if args.agents > 1 and not model_runs_in_parallel(args.model):
         # One request at a time on the GPU: 2 agents take turns, one compiles while the other generates (the time
@@ -823,68 +1212,126 @@ def main():
         GEN = threading.Semaphore(1)
     else:
         GEN = threading.Semaphore(max(1, args.agents))
-    # Small functions go by batches of neighbours of similar size (same module of the SDK / engine most of the time):
-    # one request for several of them. Each batch starts where the queue order puts its first function.
-    units, used = [], set()
-    small = [t for t in todo if t[1] <= args.group_size] if args.group > 1 else []
-    for t in todo:
-        if t[0] in used:
-            continue
-        unit = [t]
-        if t in small:
-            near = sorted((u for u in small if u[0] not in used and u is not t),
-                          key=lambda u: (abs(u[2] - t[2]) // 0x400, abs(u[1] - t[1]), abs(u[2] - t[2])))
-            unit += near[:args.group - 1]
-        used.update(u[0] for u in unit)
-        units.append(unit)
-    log(f"{len(todo)} fonctions avec brouillon en {len(units)} requetes de depart, {args.agents} agent(s), modele "
-        f"{args.model}, {args.variants} versions par reponse, blocs {', '.join(BLOCKS)}")
+    profiles = [c[0] for c in am.COMPILERS[:2]]
+    default = profiles[0]
     STOP.unlink(missing_ok=True)
     integ = Integrator()
     integ.start()
-    tried = [0]
+    fns = [Fn(*t) for t in todo]
+    log(f"{len(fns)} fonctions : preparation (memoire des essais, compilateur de la zone, difficulte)...")
+    prepare(fns, profiles)
+    done_names = set()
 
-    def agent(unit):
-        if STOP.exists():
+    def matched(f: Fn, source: str) -> None:
+        if f.name in done_names:
             return
-        covered = am.covered_ranges()
-        fns = [Fn(*t) for t in unit if not any(a <= t[2] < e for a, e in covered)]  # matched meanwhile: skip
-        if not fns:
-            return
-        tried[0] += len(fns)
-        starts = probe_many([(f, f.best, p) for f in fns for p in profiles])
-        for i, f in enumerate(fns):
-            mine = [(score(out), p, out) for p, (_ok, out) in zip(profiles, starts[i * len(profiles):(i + 1) * len(profiles)])]
-            f.score, f.profile, f.out = min(mine, key=lambda r: r[0])
-            f.context = code_context(f.name)
-            if f.score == 0:
-                f.source = f.best
-            log(f"{f.name} ({f.size} octets, {f.profile}) : depart {f.score} instructions differentes"
-                + (" [edits]" if f.patch_mode and len(fns) == 1 else ""))
-        if len(fns) > 1:
-            log(f"lot de {len(fns)} petites fonctions : {', '.join(f.name for f in fns)}")
-        t0 = time.time()
-        rest = [f for f in fns if f.source is None]
-        if rest:
-            solve(rest)
-        for f in fns:
-            if f.source is None:
-                log(f"{f.name}: pas de match ({time.time() - t0:.0f}s)")
+        done_names.add(f.name)
+        if f.profile != default and not source.startswith(am.MARKER):
+            source = f"{am.MARKER}{f.profile} */\n" + source
+        integ.q.put((f.name, f.size, f.addr, source))
+
+    for f in fns:
+        if f.source:
+            log(f"{f.name}: deja MATCH au depart ({f.profile}) -> file d'integration")
+            matched(f, f.source)
+    seen = set()
+
+    def order(f):
+        rep = first.get(f.name, f.name)
+        later = rep in seen  # another function of the same family comes first
+        seen.add(rep)
+        return (later, -weight.get(f.name, 0), f.diff)
+    fns.sort(key=lambda f: f.diff)
+    fns.sort(key=order)
+
+    def run_pass(group: list[Fn], minutes: float, plateau: int, final: bool) -> None:
+        # Small functions go by batches of neighbours of similar size: one request for several of them
+        units, used = [], set()
+        small = [f for f in group if f.size <= args.group_size] if args.group > 1 else []
+        for f in group:
+            if f.name in used:
                 continue
-            source = f.source
-            if f.profile != profiles[0] and not source.startswith(am.MARKER):
-                source = f"{am.MARKER}{f.profile} */\n" + source
-            log(f"{f.name}: MATCH en {time.time() - t0:.0f}s -> file d'integration")
-            integ.q.put((f.name, f.size, f.addr, source))
+            unit = [f]
+            if f in small:
+                near = sorted((u for u in small if u.name not in used and u is not f),
+                              key=lambda u: (abs(u.addr - f.addr) // 0x400, abs(u.size - f.size), abs(u.addr - f.addr)))
+                unit += near[:args.group - 1]
+            used.update(u.name for u in unit)
+            units.append(unit)
 
-    with ThreadPoolExecutor(max_workers=max(1, args.agents)) as ex:
-        list(ex.map(agent, units))
+        def agent(unit):
+            if STOP.exists():
+                return
+            covered = am.covered_ranges()
+            unit = [f for f in unit if f.source is None and not any(a <= f.addr < e for a, e in covered)]
+            if not unit:
+                return
+            for f in unit:
+                dist = f.score[1] if f.score[1] < 10**6 else "-"
+                log(f"{f.name} ({f.size} octets, {f.profile}) : {f.score[0]} diffs, distance {dist}"
+                    + (" [edits]" if f.patch_mode and len(unit) == 1 else ""))
+            if len(unit) > 1:
+                log(f"lot de {len(unit)} petites fonctions : {', '.join(f.name for f in unit)}")
+            t0 = time.time()
+            solve(unit, minutes, plateau, final)
+            for f in unit:
+                if f.source is not None:
+                    log(f"{f.name}: MATCH en {time.time() - t0:.0f}s -> file d'integration")
+                    matched(f, f.source)
+                else:
+                    log(f"{f.name}: pas de match ({f.score[0]} diffs, {time.time() - t0:.0f}s)")
+                    if 0 < f.score[0] <= args.permute_at:
+                        permute(f, matched)
+                save_memory(f)
+        with ThreadPoolExecutor(max_workers=max(1, args.agents)) as ex:
+            list(ex.map(agent, units))
+
+    pass1 = [f for f in fns if f.source is None]
+    log(f"passe 1 (rapide, {args.pass1_minutes:g} min max par fonction, arret apres {args.plateau} tours sans progres) : "
+        f"{len(pass1)} fonctions, {args.agents} agent(s), modele {args.model}"
+        + (f" (+ {args.small_model} pour les faciles)" if args.small_model else "")
+        + f", {args.variants} versions par reponse" + (f", blocs {', '.join(BLOCKS)}" if BLOCKS else ", file difficile"))
+    run_pass(pass1, args.pass1_minutes, args.plateau, final=False)
+    close = [f for f in fns if f.source is None and f.name not in done_names and 0 < f.score[0] <= args.pass2_diffs]
+    if close and not STOP.exists():
+        # The C may be right and the compiler or the flags wrong: try all of them on the close ones (CPU only)
+        log(f"{len(close)} fonction(s) a {args.pass2_diffs} diffs ou moins : essai des autres compilateurs et options")
+        for f, found in zip(close, COMPILE_POOL.map(sweep_profiles, close)):
+            if not found:
+                continue
+            p, out, lines, r = found
+            log(f"  {f.name}: {p} -> {out.strip().splitlines()[-1] if out.strip() else '?'}")
+            f.profile, f.out, f.lines, f.score = p, out, lines, r
+            if r[0] == 0:
+                f.source = f.best
+                matched(f, f.best)
+        close = [f for f in close if f.source is None]
+    if close and not STOP.exists():
+        log(f"passe 2 (longue, {args.minutes:g} min max) sur les {len(close)} fonction(s) les plus proches"
+            + (f", reflexion a {args.think_at} diffs ou moins" if args.think_at else ""))
+        for f in close:
+            f.stale = 0
+        run_pass(close, args.minutes, args.plateau * 2, final=True)
     if STOP.exists():
         log("fichier STOP trouve : arret apres les fonctions en cours.")
+    PERMUTE_POOL.shutdown(wait=True)  # permuter matches still go through the integrator
+    # Functions left a few instructions away: the queue for a bigger model (--hard)
+    for f in fns:
+        if f.name in done_names:
+            hard.pop(f.name, None)
+        elif 0 < f.score[0] <= args.pass2_diffs:
+            hard[f.name] = {"score": list(f.score), "best": f.best, "profile": f.profile, "t": time.time(),
+                            "model": args.model}
+    HARD.write_text(json.dumps(hard, indent=1), encoding="utf-8")
+    left = [n for n in hard if n not in done_names]
+    if left:
+        log(f"{len(left)} fonction(s) a {args.pass2_diffs} diffs ou moins dans la file difficile "
+            f"({HARD.relative_to(ROOT)}) : `--hard --model <plus gros modele>`")
     integ.q.put(None)
     integ.join()
-    release_blocks()
-    log(f"fini : {len(integ.won)} nouvelles fonctions sur {tried[0]} essayees"
+    if not args.hard:
+        release_blocks()
+    log(f"fini : {len(integ.won)} nouvelles fonctions sur {len(fns)}"
         + (f", + {len(integ.extra)} sans IA (clones, voisins)" if integ.extra else "")
         + (f" ; rejetees au verify : {', '.join(integ.lost)}" if integ.lost else ""))
 
