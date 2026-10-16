@@ -365,6 +365,7 @@ def check(img: Image, name: str, source: str, profile: str) -> str:
             return "other functions in the object"
         code = obj.section_bytes(shndx)[off: off + size]
         relocs = {o: (typ, sym, add) for o, typ, sym, add in obj.function_relocs(shndx, off, size)}
+        local = {s[0] for s in obj.syms if s[0] and 0 < s[4] < 0xFF00}  # defined in the object itself
     tw, cw = words(target), words(code)
     for i, (a, b) in enumerate(zip(tw, cw)):
         if 4 * i not in relocs:
@@ -372,6 +373,8 @@ def check(img: Image, name: str, source: str, profile: str) -> str:
                 return f"word {i} differs"
             continue
         typ, sym, add = relocs[4 * i]
+        if sym and sym not in img.addr_of and sym not in local:
+            return f"uses {sym}, which this game does not have (the link would fail)"
         if typ == donorlib.R_ARM_ABS32:
             want = img.addr_of.get(sym)
             if sym and want is not None and a not in (want + add, (want + add) | 1):
@@ -526,6 +529,20 @@ def run(cmd):
     return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
+def drop(paths: list[Path]) -> None:
+    """Removes integrated files again: their delinks.txt / compilers.txt entries and the sources."""
+    rels = {p.relative_to(ROOT).as_posix() for p in paths}
+    text = am.DELINKS.read_text(encoding="utf-8")
+    for rel in rels:
+        text = re.sub(r"\n" + re.escape(rel) + r":\n    complete\n    \.text[^\n]*\n", "\n", text)
+    am.DELINKS.write_text(text, encoding="utf-8", newline="\n")
+    if am.COMPILERS_TXT.exists():
+        keep = [l for l in am.COMPILERS_TXT.read_text(encoding="utf-8").splitlines(True) if l.split(" ")[0] not in rels]
+        am.COMPILERS_TXT.write_text("".join(keep), encoding="utf-8", newline="\n")
+    for p in paths:
+        p.unlink(missing_ok=True)
+
+
 def integrate_verified(found: list[tuple[str, int, int, str]], log=print) -> list[str]:
     """Adds the matches to src/auto/ + delinks.txt and keeps the ones the ROM accepts. Returns the names kept."""
     backup = am.DELINKS.read_bytes()
@@ -538,6 +555,18 @@ def integrate_verified(found: list[tuple[str, int, int, str]], log=print) -> lis
         run([pc_exe, "run", "clang-format", "--files", *[str(p.relative_to(ROOT)) for p in created]])
     run([sys.executable, "tools/configure.py", project.VERSION])
     verify = run([sys.executable, "tools/match.py", "verify"])
+    for _ in range(5):
+        # A link error names the object that needs a missing symbol: drop those files and build again
+        out = verify.stdout + verify.stderr
+        bad = set(re.findall(r'Referenced from "\w+" in (\w+)\.o', out))
+        bad_paths = [c for c in created if c.stem in bad]
+        if verify.returncode == 0 or not bad_paths:
+            break
+        log(f"link error: dropping {len(bad_paths)} file(s): {', '.join(p.stem for p in bad_paths)}")
+        drop(bad_paths)
+        created = [c for c in created if c not in bad_paths]
+        run([sys.executable, "tools/configure.py", project.VERSION])
+        verify = run([sys.executable, "tools/match.py", "verify"])
     if verify.returncode != 0:
         import find_culprits
         log("verify failed: looking for the files that break the ROM...")
