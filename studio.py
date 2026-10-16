@@ -58,6 +58,7 @@ def main():
     s.add_argument("game"); s.add_argument("--token", default="")
     s = sub.add_parser("publish"); s.add_argument("game"); s.add_argument("--private", action="store_true")
     s.add_argument("--yes", action="store_true")
+    sub.add_parser("mcp-config", help="the command that gives Claude Code (or any MCP client) the studio's tools")
     a = ap.parse_args()
 
     if a.cmd in (None, "serve"):
@@ -119,6 +120,12 @@ def main():
             if input("Continuer ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
                 return
         out(projects.publish(a.game, public=not a.private))
+    elif a.cmd == "mcp-config":
+        from dsstudio import gameenv
+        server = Path(__file__).resolve().parent / "workers" / "mcp_server.py"
+        print(f'claude mcp add --scope user ds-studio -- "{gameenv.PYTHON}" "{server}"')
+        print(json.dumps({"mcpServers": {"ds-studio": {"command": str(gameenv.PYTHON), "args": [str(server)]}}},
+                         indent=2))
 
 
 if __name__ == "__main__":

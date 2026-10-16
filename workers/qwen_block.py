@@ -194,7 +194,9 @@ def score(out):
 def starting_draft(name):
     for p in (ROOT / "build" / "auto" / "near" / f"{name}.c", ROOT / "build" / "drafts" / f"{name}.c"):
         if p.exists():
-            return p.read_text(encoding="utf-8", errors="replace")
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if "m2c failed" not in text[:300]:
+                return text
     cache = ROOT / "build" / "auto" / "cache.jsonl"
     if cache.exists():
         best = None
@@ -205,8 +207,20 @@ def starting_draft(name):
                 continue
             if r[0] == name and len(r) > 4 and r[4]:
                 best = r[4]
-        return best
-    return None
+        if best:
+            return best
+    # no m2c draft: Ghidra's reading (tools/ghidra_draft.py), a start that at least has the right structure
+    p = ROOT / "build" / "ghidra" / f"{name}.c"
+    return p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
+
+
+def ghidra_reading(name: str) -> str:
+    """Ghidra's decompilation of the function, when tools/ghidra_draft.py made one (without its header)."""
+    p = ROOT / "build" / "ghidra" / f"{name}.c"
+    if not p.exists():
+        return ""
+    text = p.read_text(encoding="utf-8", errors="replace")
+    return text.split('#include "m2c.h"', 1)[-1].strip()[:4000]
 
 
 CODE_BLOCK = re.compile(r"```[a-zA-Z]*[ \t]*\n.*?```", re.S)
@@ -423,6 +437,11 @@ class Fn:
         if ex:
             parts.append("Matched functions whose code is close (their assembly, then the C that compiles to it "
                          "EXACTLY with this compiler): reuse their style, types and loop forms.\n" + ex)
+        gh = ghidra_reading(self.name)
+        if gh and gh.strip() != (self.best or "").strip():
+            parts.append("Another decompiler (Ghidra) reads the function like this (its structure and the names of what "
+                         "it points at help; its types and its arguments are often wrong, the target assembly "
+                         f"decides):\n```c\n{gh}\n```")
         parts.append(f"Target assembly of {self.name} (the original function):\n```\n{self._asm.strip()}\n```")
         self._fixed = "\n\n".join(parts)
         return self._fixed

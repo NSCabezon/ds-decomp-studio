@@ -1,13 +1,14 @@
 """HTTP server of the studio (standard library only). Serves web/ and a JSON API on 127.0.0.1."""
 import json
 import mimetypes
+import re
 import threading
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import blocks, brief, config, difficulty, engine, games, jobs, projects, toolsync, xp
+from . import blocks, brief, config, difficulty, engine, gameenv, games, jobs, projects, toolsync, xp
 
 
 def overview():
@@ -136,6 +137,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send({"roms": projects.roms_without_project()})
             if p == "github":
                 return self.send({"repos": projects.published_on_github()})
+            if p == "wb/info":  # the C editor: everything about one function (tools/workbench.py of the game)
+                return self.send(gameenv.workbench(games.get(q["game"]).path, "info", q["name"], timeout=120))
+            if p == "wb/pending":
+                return self.send(gameenv.workbench(games.get(q["game"]).path, "pending", timeout=60))
+            if p == "wb/data":
+                return self.send(gameenv.workbench(games.get(q["game"]).path, "data", q["name"], timeout=60))
         except KeyError as e:
             return self.send({"error": str(e)}, 400)
         except Exception as e:
@@ -197,6 +204,19 @@ class H(BaseHTTPRequestHandler):
                 return self.send(projects.restore(d["name"]))
             if p == "clone":
                 return self.send(projects.clone(d["url"]))
+            if p in ("wb/judge", "wb/submit"):
+                g = games.get(d["game"])
+                name = d["name"]
+                if not re.fullmatch(r"\w+", name):
+                    return self.send({"error": "bad function name"}, 400)
+                f = g.path / "build" / "workbench" / "editor" / f"{name}.c"
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(d["source"], encoding="utf-8", newline="\n")
+                if p == "wb/judge":
+                    return self.send(gameenv.workbench(g.path, "judge", name, str(f), timeout=300))
+                # integration rebuilds the ROM (minutes): a job, like every task that writes in the game
+                return self.send(jobs.submit("wb_submit", g.id, {"name": name, "file": f.relative_to(g.path).as_posix(),
+                                                                  "who": s["who"]}, s["who"]))
         except KeyError as e:
             return self.send({"error": str(e)}, 400)
         except Exception as e:

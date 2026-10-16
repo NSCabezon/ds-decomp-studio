@@ -70,3 +70,8 @@ th.sort{cursor:pointer;user-select:none;white-space:nowrap}th.sort:hover,th.sort
 .scrollbox{max-height:420px;overflow-y:auto;border:1px solid var(--line,#2a3142);border-radius:8px}
 .scrollbox th{position:sticky;top:0;background:var(--panel);z-index:1}
 #logpre{max-height:420px;overflow-y:auto}
+.modal>div:has(.editor){width:min(1500px,98vw);max-height:96vh}
+.edgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.edgrid textarea{width:100%;box-sizing:border-box;height:66vh;font:12.5px/1.45 Consolas,monospace;resize:vertical;tab-size:4;white-space:pre}
+.edgrid pre{height:62vh;max-height:none;margin-top:4px;white-space:pre}
+@media (max-width:900px){.edgrid{grid-template-columns:1fr}}

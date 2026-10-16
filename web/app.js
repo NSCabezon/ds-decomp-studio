@@ -155,7 +155,7 @@ async function viewGame() {
     <div style="min-width:260px">${pctBar(g.pct_code)}<div class="hint" style="text-align:right">${fmt(g.matched)} / ${fmt(g.functions)} fonctions${g.modules > 1 ? ` (${g.modules} modules, principal ${g.pct_main.toFixed(2)} %)` : ""}</div>
     ${g.left_manual ? `<div class="hint" style="text-align:right"><a href="#game" onclick="sub='functions';fnKind='manual';render();return false">${fmt(g.left_manual)} a faire a la main</a> (Thumb, overlays, ITCM : pas d'outil auto)</div>` : ""}</div></div>
     <h3 style="margin-top:12px">Taches machine sur ce jeu</h3><div class="btns">
-    ${["moulinette", "auto", "clone", "donors", "names", "regroup", "cleanup", "progress", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
+    ${["moulinette", "auto", "clone", "donors", "ghidra", "wb_commit", "names", "regroup", "cleanup", "progress", "verify", "culprits", "build", "dis", "status", "permute"].map(k => `<button class="btn small ${k === "moulinette" ? "" : "sec"}" title="${esc(JD(k).desc)}" onclick="runJob('${k}')">${esc(JD(k).label)}</button>`).join("")}
     ${g.tools_behind && g.tools_behind.length ? `<button class="btn small" style="background:#b45309" title="${esc(g.tools_behind.join(", "))}" onclick="runJob('sync_tools',{})">Mettre a jour les outils (${g.tools_behind.length} en retard)</button>` : '<span class="tag ok">outils a jour</span>'}
     ${g.remote ? "" : `<button class="btn small green" onclick="publishGame()">Publier sur GitHub</button>`}
     </div></div>`;
@@ -250,7 +250,7 @@ async function openBlock(id) {
     <div class="btns"><button class="btn small" onclick="navigator.clipboard.writeText(BRIEF);toast('Brief copie : colle-le a Claude ou a une autre IA')">Copier le brief pour une IA</button>
     <button class="btn small sec" onclick="closeModal()">Fermer</button></div></div>
     <table style="margin-top:10px"><tr><th>Fonction</th><th>Adresse</th><th class="num">Taille</th><th>Niveau</th><th>auto_match</th><th>Note</th></tr>
-    ${d.functions.map(f => `<tr class="click" onclick="showAsm('${esc(f.name)}')"><td>${f.done ? "&#10004; " : ""}<b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td>
+    ${d.functions.map(f => `<tr class="click" onclick="${f.mode === "arm" && (f.module || "main") === "main" ? "openEditor" : "showAsm"}('${esc(f.name)}')"><td>${f.done ? "&#10004; " : ""}<b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td>
       <td class="num">${f.size}</td><td>${f.done ? '<span class="hint">matchee</span>' : `<span class="c${f.level}">${esc(LV(f.level).label)}</span>`}</td>
       <td class="hint">${esc(f.auto || "")}</td><td class="hint">${f.port ? portNote(f.port) + " " + esc(f.port.file) : f.shared >= 2 ? "SDK (" + f.shared + " jeux)" : ""}</td></tr>`).join("")}</table>
     <div id="asm"></div><h3 style="margin-top:14px">Brief (pour une personne ou une IA)</h3><pre>${esc(d.brief)}</pre>`);
@@ -259,6 +259,66 @@ async function showAsm(name) {
   const d = await api(`asm?game=${encodeURIComponent(game())}&name=${encodeURIComponent(name)}`);
   $("#asm").innerHTML = `<h3 style="margin-top:12px">${esc(name)}</h3><pre>${esc(d.asm)}</pre>`;
   $("#asm").scrollIntoView({behavior: "smooth"});
+}
+
+// ---- C editor: write the function, Ctrl+Enter compiles it with the game's compilers and shows the diff
+const edKey = n => `ed:${game()}:${n}`;
+async function openEditor(name) {
+  modal('<p class="hint">Chargement...</p>');
+  const d = await api(`wb/info?game=${encodeURIComponent(game())}&name=${encodeURIComponent(name)}`);
+  if (d.error) return closeModal();
+  window.ED = {name, info: d};
+  const facts = [d.calls.length ? "appelle " + d.calls.slice(0, 6).join(", ") + (d.calls.length > 6 ? "..." : "") : "",
+    d.data.length ? "donnees " + d.data.slice(0, 4).join(", ") : "", d.callers.length ? "appelee par " + d.callers.slice(0, 3).join(", ") : "",
+    "compilateurs " + d.profiles.join(" / ")].filter(Boolean).join(" &middot; ");
+  modal(`<div class="editor"><div class="btns" style="justify-content:space-between"><h2 style="margin:0">${esc(name)}
+    <span class="hint">${esc(d.addr)} &middot; ${d.size} octets &middot; ${d.matched ? "deja matchee (" + esc(d.file) + ")" : "depart : " + esc(d.draft_from)}</span></h2>
+    <div class="btns"><button class="btn small" onclick="edJudge()">Compiler (Ctrl+Entree)</button>
+    <button class="btn small green" id="edsubmit" disabled onclick="edSubmit()" title="dans src/auto + delinks.txt, ROM reconstruite (garde si identique)">Integrer au jeu</button>
+    <button class="btn small sec" onclick="edReset()">Revenir au depart</button>
+    <button class="btn small sec" onclick="edShowAsm()">Assembleur</button>
+    ${d.ghidra ? `<button class="btn small sec" onclick="$('#edout').textContent=ED.info.ghidra" title="la lecture de Ghidra (tache Brouillons Ghidra) : structure et noms utiles, types souvent faux">Ghidra</button>` : ""}
+    <button class="btn small sec" onclick="closeModal()">Fermer</button></div></div>
+    <div class="hint" style="margin:6px 0">${facts}</div>
+    <div class="edgrid"><textarea id="edsrc" spellcheck="false"></textarea>
+    <div><div id="edstatus" class="hint">Ctrl+Entree : compile avec le compilateur du jeu et compare au code d'origine (asm, #define/#pragma ajoutes... sont refuses).</div><pre id="edout"></pre></div></div>
+    <div class="btns" style="margin-top:8px;justify-content:space-between"><span class="hint" id="edpending"></span>
+    <button class="btn small sec" onclick="runJob('wb_commit',{push:true})" title="${esc(JD('wb_commit').desc)}">Valider les matchs en attente (verify + commit + push)</button></div></div>`);
+  let saved = null;
+  try { saved = localStorage.getItem(edKey(name)); } catch (e) {}
+  const ta = $("#edsrc");
+  ta.value = saved || d.draft || `#include "m2c.h"\n\n`;
+  edShowAsm();
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); edJudge(); }
+    else if (e.key === "Tab") { e.preventDefault(); const s = ta.selectionStart; ta.setRangeText("    ", s, ta.selectionEnd, "end"); }
+  });
+  ta.addEventListener("input", () => { try { localStorage.setItem(edKey(name), ta.value); } catch (e) {} $("#edsubmit").disabled = true; });
+  edPending();
+}
+function edShowAsm() { $("#edout").textContent = ED.info.asm || "(pas d'assembleur : tache Desassembler)"; }
+function edReset() {
+  if (!confirm("Remettre le C de depart ? (tes changements de cette fonction sont perdus)")) return;
+  try { localStorage.removeItem(edKey(ED.name)); } catch (e) {}
+  $("#edsrc").value = ED.info.draft || ""; $("#edsubmit").disabled = true;
+}
+async function edJudge() {
+  $("#edstatus").textContent = "Compilation...";
+  const r = await api("wb/judge", {game: game(), name: ED.name, source: $("#edsrc").value});
+  if (!r || r.error) { $("#edstatus").textContent = "Erreur"; $("#edout").textContent = r && r.output || ""; return; }
+  const st = {match: "MATCH", near: `${r.diffs}/${r.total} instructions differentes`, size: `taille differente (0x${(r.size || 0).toString(16)} au lieu de 0x${(r.target_size || 0).toString(16)})`,
+    compile: "ne compile pas", refused: "refuse"}[r.status] || r.status;
+  $("#edstatus").innerHTML = `<b class="${r.match ? "c1" : r.status === "near" ? "c3" : "c5"}">${esc(st)}</b>` + (r.profile ? ` <span class="hint">(${esc(r.profile)})</span>` : "");
+  $("#edout").textContent = r.match ? "Identique au code d'origine. Integre-la au jeu." : r.why || r.errors || r.diff || "";
+  $("#edsubmit").disabled = !r.match || ED.info.matched;
+}
+async function edSubmit() {
+  const r = await api("wb/submit", {game: game(), name: ED.name, source: $("#edsrc").value});
+  if (r.n) { toast(`Integration de ${ED.name} lancee (onglet Queue) : la ROM est reconstruite`); $("#edsubmit").disabled = true; setTimeout(edPending, 3000); }
+}
+async function edPending() {
+  const r = await api(`wb/pending?game=${encodeURIComponent(game())}`);
+  if (r && r.pending && $("#edpending")) $("#edpending").textContent = r.pending.length ? `${r.pending.length} match(s) integre(s), pas encore valide(s) : ${r.pending.map(p => p.name).slice(0, 5).join(", ")}` : "Aucun match en attente de validation.";
 }
 
 async function subFunctions() {
@@ -272,7 +332,7 @@ async function subFunctions() {
   if (d.error) return;
   $("#fncount").textContent = `${fmt(d.total)} fonctions${d.total > d.rows.length ? " (400 premieres)" : ""}`;
   $("#fntable").innerHTML = `<table><tr><th>Fonction</th><th>Adresse</th><th class="num">Taille</th><th>Mode</th><th>Niveau</th><th>auto_match</th><th>Bloc</th><th>Note</th></tr>
-    ${d.rows.map(f => `<tr class="click" onclick="showAsm('${esc(f.name)}')"><td><b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td><td class="num">${f.size}</td>
+    ${d.rows.map(f => `<tr class="click" onclick="${f.mode === "arm" && f.module === "main" ? "openEditor" : "showAsm"}('${esc(f.name)}')" title="${f.mode === "arm" && f.module === "main" ? "ouvrir l'editeur C" : "assembleur (l'editeur gere le module principal ARM)"}"><td><b>${esc(f.name)}</b></td><td class="hint">${hex(f.addr)}</td><td class="num">${f.size}</td>
     <td class="hint">${f.mode}${f.module !== "main" ? " &middot; " + esc(f.module) : ""}</td><td>${f.done ? (esc(f.file || "")) : `<span class="c${f.level}">${esc(LV(f.level).label)}</span>`}</td><td class="hint">${esc(f.auto || "")}</td>
     <td class="hint">${esc(f.block || "")}</td><td class="hint">${f.port ? portNote(f.port) : f.shared >= 2 ? "SDK (" + f.shared + ")" : ""}</td></tr>`).join("")}</table>`;
 }
@@ -323,6 +383,9 @@ const JOB_OPTS = {
   moulinette: [["push", "Pousser sur GitHub si la verification passe", "check", true], ["permute_near", "Permuter sur N near misses (0 = non)", "number", 0],
     ["near_minutes", "Minutes de permuter par near miss", "number", 5], ["restart", "Oublier les echecs deja essayes", "select", ["", "all", "auto", "permuter", "qwen"]],
     ["no_drafts", "Sans brouillons m2c", "check", false], ["no_auto", "Sans auto-match", "check", false], ["no_commit", "Verifier seulement (pas de commit)", "check", false]],
+  ghidra: [["block", "Seulement le bloc (ex. L1-02003, vide = les fonctions sans brouillon m2c)", "text", ""],
+    ["max", "Nombre max de fonctions (0 = toutes)", "number", 200]],
+  wb_commit: [["push", "Pousser sur GitHub si la verification passe", "check", true]],
 };
 function optField([k, label, type, def]) {
   if (type === "check") return `<tr><td>${esc(label)}</td><td><input type="checkbox" data-k="${k}" ${def ? "checked" : ""}></td></tr>`;
@@ -483,7 +546,13 @@ async function saveSettings() {
 
 // ---------------- boucle ----------------
 (async function init() {
-  tabs(); await loadOverview(); render(); loadXP();
+  // #edit/<game>/<function>: straight into the C editor (links from briefs, logs...)
+  const deep = location.hash.match(/^#edit\/([^/]+)\/(\w+)$/);
+  if (deep) tab = "game";
+  tabs(); await loadOverview();
+  if (deep && O.settings.active_game !== deep[1]) { await api("settings", {active_game: deep[1]}); O.settings.active_game = deep[1]; }
+  render(); loadXP();
+  if (deep) { location.hash = "game"; openEditor(deep[2]); }
   setInterval(async () => {
     if (document.hidden || $("#modal").classList.contains("on")) return;
     if (tab === "queue") await refreshQueue();

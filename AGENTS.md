@@ -15,12 +15,31 @@ python studio/studio.py touch <game> <block> --note "..."      # still working /
 python studio/studio.py done <game> <block>                    # or `release` to give it back unfinished
 ```
 
+### With MCP (Claude Code, Codex...)
+
+`python studio/studio.py mcp-config` prints the command that gives an agent the studio's tools
+(`workers/mcp_server.py`): claim_block, get_function (asm, draft, Ghidra's reading, calls, look-alikes from all
+games), compile_and_diff, submit_match, commit_matches, read_data / check_data, edit_header, split_function. They
+all run the game's `tools/workbench.py`, which can also be used by hand:
+
+```shell
+python tools/workbench.py info <function>          # everything about one function (JSON)
+python tools/workbench.py judge <function> f.c     # compile + compare with the game's compilers
+python tools/workbench.py submit <function> f.c    # into src/auto, ROM rebuilt, kept only if byte-identical
+python tools/workbench.py commit [--push]          # one full verify for all submitted matches, then commit
+python tools/workbench.py data <symbol>            # decoded data + a C declaration; datacheck f.c compares it
+python tools/workbench.py header include/engine.h new.h   # shared header, kept only if the ROM still matches
+python tools/ghidra_draft.py --names a,b            # Ghidra drafts in build/ghidra/ (2nd reading after m2c)
+```
+
 ## Rules
 
 1. Work only inside `projets/<game>/`. Run `source env.sh` (Git Bash) first.
 2. Never commit unless `python tools/match.py verify` prints `VERIFY PASSED`. Commit only the files you changed
    (`src/`, `include/`, `config/`), never `git add -A`.
 3. ASCII-only sources, comments in English. `asm` functions only for instructions the compiler never emits.
+   Fake matches are refused by the tools (`gametools/fakematch.py`): asm, new `#define`/`#pragma`/`#include` lines,
+   `##`, `_Pragma`, `__declspec`/`__attribute__`, machine code written as numbers.
 4. Never use leaked source code. Never commit ROMs, extracted assets or build outputs.
 5. `.studio/` is written by the studio only (through the commands above).
 6. Level "Portable" functions have an identical twin already matched in another game: the brief names the source

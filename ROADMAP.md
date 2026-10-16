@@ -41,7 +41,7 @@ un outil ou une couche faite pour Rayman doit servir tel quel au jeu suivant.
 | `donor_match.py` (autres décomps + nos autres jeux) | ✅ main ARM | idem overlays et Thumb ; indexer NitroSystem/MSL avec plus de profils de compilateur (1.2/sp3, 2.0/sp2…) pour couvrir les vieilles versions du SDK |
 | Permuter, Qwen, Claude par blocs | ✅ | brief par bloc avec le contexte du moteur (types, fonctions voisines déjà matchées) |
 | Fonctions asm (SDK, `mrs/msr/swp`) | ✅ | — |
-| **Données** (`.data`, `.rodata`, `.bss`) | 🔴 | aujourd'hui seul `.text` compte : outil qui déclare les tables, chaînes et constantes en C (pour le natif, toute donnée doit exister dans le source) |
+| **Données** (`.data`, `.rodata`, `.bss`) | 🟡 | `workbench.py data <symbole>` décode une donnée (chaîne, mots, pointeurs nommés) et en écrit la déclaration C ; `workbench.py datacheck f.c` compile un fichier et compare chaque donnée qu'il définit au jeu (valeurs, pointeurs par cible, taille, ordre). Testé sur MySims : chaînes, constantes et pointeurs refont les mêmes octets. À faire : déclarer les données dans les fichiers (plages `.data`/`.rodata` dans delinks.txt) et les traiter en masse (pour le natif, toute donnée doit exister dans le source) |
 | ARM7 | ⚪ | **inutile pour le natif** : c'est le firmware son/wifi/tactile standard de Nintendo, remplacé par le runtime (étape 6) |
 
 **Critère de sortie** : le module principal + ITCM/DTCM (+ overlays) à 100 % code et 100 % données, VERIFY PASSED.

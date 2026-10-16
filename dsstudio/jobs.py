@@ -59,6 +59,18 @@ DEFS = {
                  "de tous les jeux du README du Studio, puis commit + push"),
     "new_project": ("Ajouter un jeu", "global", 600, "dsd init + build depuis une ROM de roms/"),
     "publish": ("Publier sur GitHub", "game", 180, "cree le repo public et pousse"),
+    "wb_submit": ("Integrer une fonction (editeur)", "game", 180,
+                  "le C de l'editeur dans src/auto + delinks.txt, puis la ROM reconstruite : garde seulement si elle "
+                  "reste identique (pas encore commite)"),
+    "wb_commit": ("Valider les matchs en attente", "game", 900,
+                  "verify complet une fois pour toutes les fonctions integrees (editeur, Claude...), retire les "
+                  "fichiers refuses, puis commit (+ push)"),
+    "ghidra": ("Brouillons Ghidra", "game", 1800,
+               "decompile avec Ghidra les fonctions sans brouillon m2c (build/ghidra/) : un 2e point de depart pour "
+               "Qwen et Claude"),
+    "split": ("Decouper une fonction fusionnee", "game", 300,
+              "coupe une fonction en deux dans symbols.txt (dsd en a fusionne deux), garde seulement si la ROM reste "
+              "identique"),
 }
 
 _lock = threading.RLock()
@@ -189,6 +201,21 @@ def command(jid: str, game, p: dict) -> str:
         return "python tools/fingerprint.py scan projets/_analyse/*"
     if jid == "new_project":
         return f"python tools/new_project.py {_q(p['slug'])} {_q(p['rom'])}"
+    if jid == "wb_submit":
+        return f"python tools/workbench.py submit {_q(p['name'])} {_q(p['file'])} --who {_q(p.get('who') or 'editeur')}"
+    if jid == "wb_commit":
+        return "python tools/workbench.py commit" + (" --push" if p.get("push") else "")
+    if jid == "split":
+        return f"python tools/workbench.py split {_q(p['name'])} {_q(p['at'])}"
+    if jid == "ghidra":
+        cmd = "python tools/ghidra_draft.py"
+        if p.get("block"):
+            cmd += " --names " + _q(",".join(_block_functions(game, p["block"])))
+        elif p.get("names"):
+            cmd += " --names " + _q(p["names"])
+        if int(p.get("max") or 0):
+            cmd += f" --max {int(p['max'])}"
+        return cmd
     if jid == "publish":
         return f"python {_q((config.STUDIO / 'studio.py').as_posix())} publish {_q(game.id)} --yes"
     raise KeyError(jid)
