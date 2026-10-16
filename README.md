@@ -10,11 +10,11 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 ## Avancement des jeux
 
 <!-- games:start -->
-32 jeux, 21 publiés · 49892/232419 fonctions matchées au total · mis à jour le 2026-10-16 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
+32 jeux, 21 publiés · 50303/232419 fonctions matchées au total · mis à jour le 2026-10-16 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
 
 | Jeu | Version | Studio | Code matché | Fonctions | ROM | Dépôt |
 |---|---|---|---|---|---|---|
-| Rayman Raving Rabbids | usa AR5E | Ubisoft Casablanca | `█████░░░░░` 46.10% | 2513/3607 | ✅ | [Rayman-RR-usa-decomp](https://github.com/liolu/Rayman-RR-usa-decomp) |
+| Rayman Raving Rabbids | usa AR5E | Ubisoft Casablanca | `█████░░░░░` 46.12% | 2519/3607 | ✅ | [Rayman-RR-usa-decomp](https://github.com/liolu/Rayman-RR-usa-decomp) |
 | Ultimate Spider-Man | fra AUSF | Vicarious Visions | `███░░░░░░░` 31.43% | 2393/4592 | ✅ | [ultimate-spider-man-decomp](https://github.com/liolu/ultimate-spider-man-decomp) |
 | Farm Frenzy | usa BFZE | Alawar | `██░░░░░░░░` 19.27% | 755/1208 | ✅ | [farm-frenzy-decomp](https://github.com/liolu/farm-frenzy-decomp) |
 | Dragon Ball Origins | eu CDZP | Game Republic | `██░░░░░░░░` 18.75% | 2925/5118 | ✅ | [dragon-ball-origins-decomp](https://github.com/liolu/dragon-ball-origins-decomp) |
@@ -27,11 +27,11 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 | MySims | usa AQIE | EA | `█░░░░░░░░░` 11.88% | 2578/6820 | ✅ | [mysims-decomp](https://github.com/liolu/mysims-decomp) |
 | Blue Dragon: Awakened Shadow | ger YBUD | Brownie Brown | `█░░░░░░░░░` 10.48% | 3619/11800 | ✅ | [blue-dragon-awakened-shadow-decomp](https://github.com/liolu/blue-dragon-awakened-shadow-decomp) |
 | Harvest Moon DS | usa ABCE | Marvelous | `█░░░░░░░░░` 10.08% | 2677/5133 | ✅ | [harvest-moon-ds-decomp](https://github.com/liolu/harvest-moon-ds-decomp) |
+| Spider-Man: Web of Shadows | x CS5X | Amaze Entertainment | `█░░░░░░░░░` 9.57% | 2486/5846 | ✅ | [spider-man-web-of-shadows-decomp](https://github.com/liolu/spider-man-web-of-shadows-decomp) |
 | SimCity Creator | eu YC2P | EA | `█░░░░░░░░░` 9.38% | 1736/6580 | ✅ | local (pas encore de match) |
+| The Simpsons Game | usa YSZE | Amaze Entertainment | `█░░░░░░░░░` 9.19% | 2975/8968 | ✅ | [simpsons-game-decomp](https://github.com/liolu/simpsons-game-decomp) |
 | Madagascar | eu AMGP | Vicarious Visions | `█░░░░░░░░░` 8.58% | 973/3444 | ✅ | local (pas encore de match) |
 | SimAnimals | eu CM3P | EA | `█░░░░░░░░░` 8.54% | 707/2923 | ✅ | local (pas encore de match) |
-| The Simpsons Game | usa YSZE | Amaze Entertainment | `█░░░░░░░░░` 7.52% | 2779/8968 | ✅ | [simpsons-game-decomp](https://github.com/liolu/simpsons-game-decomp) |
-| Spider-Man: Web of Shadows | x CS5X | Amaze Entertainment | `█░░░░░░░░░` 7.40% | 2277/5846 | ✅ | [spider-man-web-of-shadows-decomp](https://github.com/liolu/spider-man-web-of-shadows-decomp) |
 | Code Lyoko | usa AL5E | Game Machine Studios | `█░░░░░░░░░` 6.30% | 1736/7474 | ✅ | [code-lyoko-decomp](https://github.com/liolu/code-lyoko-decomp) |
 | Livly Garden | jp BLIJ | Brownie Brown | `█░░░░░░░░░` 5.73% | 1275/9012 | ✅ | [livly-garden-decomp](https://github.com/liolu/livly-garden-decomp) |
 | Spyro: Shadow Legacy | usa ASSE | Amaze Entertainment | `░░░░░░░░░░` 4.93% | 799/3697 | ✅ | [spyro-shadow-legacy-decomp](https://github.com/liolu/spyro-shadow-legacy-decomp) |
