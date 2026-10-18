@@ -10,42 +10,42 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 ## Avancement des jeux
 
 <!-- games:start -->
-32 jeux, 21 publiés · 50303/232419 fonctions matchées au total · mis à jour le 2026-10-16 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
+32 jeux, 21 publiés · 56938/232419 fonctions matchées au total · mis à jour le 2026-10-18 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
 
 | Jeu | Version | Studio | Code matché | Fonctions | ROM | Dépôt |
 |---|---|---|---|---|---|---|
-| Rayman Raving Rabbids | usa AR5E | Ubisoft Casablanca | `█████░░░░░` 46.12% | 2519/3607 | ✅ | [Rayman-RR-usa-decomp](https://github.com/liolu/Rayman-RR-usa-decomp) |
+| Rayman Raving Rabbids | usa AR5E | Ubisoft Casablanca | `█████░░░░░` 47.23% | 2560/3607 | ✅ | [Rayman-RR-usa-decomp](https://github.com/liolu/Rayman-RR-usa-decomp) |
+| Tom and Jerry Tales | eu AJTP | Sensory Sweep | `████░░░░░░` 41.00% | 1251/1921 | ✅ | local (pas encore de match) |
 | Ultimate Spider-Man | fra AUSF | Vicarious Visions | `███░░░░░░░` 31.43% | 2393/4592 | ✅ | [ultimate-spider-man-decomp](https://github.com/liolu/ultimate-spider-man-decomp) |
-| Farm Frenzy | usa BFZE | Alawar | `██░░░░░░░░` 19.27% | 755/1208 | ✅ | [farm-frenzy-decomp](https://github.com/liolu/farm-frenzy-decomp) |
-| Dragon Ball Origins | eu CDZP | Game Republic | `██░░░░░░░░` 18.75% | 2925/5118 | ✅ | [dragon-ball-origins-decomp](https://github.com/liolu/dragon-ball-origins-decomp) |
-| Powerpuff Girls Z | jp YPPJ | Bandai Namco | `██░░░░░░░░` 18.75% | 939/2359 | ✅ | [powerpuff-girls-z-decomp](https://github.com/liolu/powerpuff-girls-z-decomp) |
-| Nintendogs Dachshund | usa ADGE | Nintendo EAD | `██░░░░░░░░` 16.65% | 3265/8609 | ✅ | [nintendogs-dachshund-decomp](https://github.com/liolu/nintendogs-dachshund-decomp) |
-| Cooking Mama | usa ACCE | Office Create | `██░░░░░░░░` 15.18% | 1027/2551 | ✅ | [cooking-mama-decomp](https://github.com/liolu/cooking-mama-decomp) |
-| LEGO Star Wars II | usa AL7E | Amaze Entertainment | `█░░░░░░░░░` 14.93% | 2335/4763 | ✅ | [lego-star-wars-ii-the-original-trilogy-decomp](https://github.com/liolu/lego-star-wars-ii-the-original-trilogy-decomp) |
-| Tom and Jerry Tales | eu AJTP | Sensory Sweep | `█░░░░░░░░░` 13.72% | 769/1921 | ✅ | local (pas encore de match) |
+| Powerpuff Girls Z | jp YPPJ | Bandai Namco | `███░░░░░░░` 26.01% | 1489/2359 | ✅ | [powerpuff-girls-z-decomp](https://github.com/liolu/powerpuff-girls-z-decomp) |
+| Madagascar | eu AMGP | Vicarious Visions | `██░░░░░░░░` 22.02% | 1803/3444 | ✅ | local (pas encore de match) |
+| Farm Frenzy | usa BFZE | Alawar | `██░░░░░░░░` 19.90% | 777/1208 | ✅ | [farm-frenzy-decomp](https://github.com/liolu/farm-frenzy-decomp) |
+| Heroes of Mana | eu AHEP | Brownie Brown | `██░░░░░░░░` 19.75% | 4825/9264 | ✅ | [heroes-of-mana-decomp](https://github.com/liolu/heroes-of-mana-decomp) |
+| Dragon Ball Origins | eu CDZP | Game Republic | `██░░░░░░░░` 18.80% | 2932/5118 | ✅ | [dragon-ball-origins-decomp](https://github.com/liolu/dragon-ball-origins-decomp) |
+| Nintendogs Dachshund | usa ADGE | Nintendo EAD | `██░░░░░░░░` 17.16% | 3353/8609 | ✅ | [nintendogs-dachshund-decomp](https://github.com/liolu/nintendogs-dachshund-decomp) |
+| LEGO Star Wars II | usa AL7E | Amaze Entertainment | `██░░░░░░░░` 15.48% | 2384/4763 | ✅ | [lego-star-wars-ii-the-original-trilogy-decomp](https://github.com/liolu/lego-star-wars-ii-the-original-trilogy-decomp) |
+| Cooking Mama | usa ACCE | Office Create | `██░░░░░░░░` 15.35% | 1034/2551 | ✅ | [cooking-mama-decomp](https://github.com/liolu/cooking-mama-decomp) |
 | Resident Evil: Deadly Silence | usa ABHE | Capcom | `█░░░░░░░░░` 12.51% | 2208/5824 | ✅ | [resident-evil-deadly-silence-decomp](https://github.com/liolu/resident-evil-deadly-silence-decomp) |
-| MySims | usa AQIE | EA | `█░░░░░░░░░` 11.88% | 2578/6820 | ✅ | [mysims-decomp](https://github.com/liolu/mysims-decomp) |
-| Blue Dragon: Awakened Shadow | ger YBUD | Brownie Brown | `█░░░░░░░░░` 10.48% | 3619/11800 | ✅ | [blue-dragon-awakened-shadow-decomp](https://github.com/liolu/blue-dragon-awakened-shadow-decomp) |
-| Harvest Moon DS | usa ABCE | Marvelous | `█░░░░░░░░░` 10.08% | 2677/5133 | ✅ | [harvest-moon-ds-decomp](https://github.com/liolu/harvest-moon-ds-decomp) |
+| MySims | usa AQIE | EA | `█░░░░░░░░░` 11.97% | 2595/6820 | ✅ | [mysims-decomp](https://github.com/liolu/mysims-decomp) |
+| Code Lyoko | usa AL5E | Game Machine Studios | `█░░░░░░░░░` 11.02% | 2114/7474 | ✅ | [code-lyoko-decomp](https://github.com/liolu/code-lyoko-decomp) |
+| Blue Dragon: Awakened Shadow | ger YBUD | Brownie Brown | `█░░░░░░░░░` 10.71% | 3667/11800 | ✅ | [blue-dragon-awakened-shadow-decomp](https://github.com/liolu/blue-dragon-awakened-shadow-decomp) |
+| Harvest Moon DS | usa ABCE | Marvelous | `█░░░░░░░░░` 10.38% | 2719/5133 | ✅ | [harvest-moon-ds-decomp](https://github.com/liolu/harvest-moon-ds-decomp) |
 | Spider-Man: Web of Shadows | x CS5X | Amaze Entertainment | `█░░░░░░░░░` 9.57% | 2486/5846 | ✅ | [spider-man-web-of-shadows-decomp](https://github.com/liolu/spider-man-web-of-shadows-decomp) |
 | SimCity Creator | eu YC2P | EA | `█░░░░░░░░░` 9.38% | 1736/6580 | ✅ | local (pas encore de match) |
 | The Simpsons Game | usa YSZE | Amaze Entertainment | `█░░░░░░░░░` 9.19% | 2975/8968 | ✅ | [simpsons-game-decomp](https://github.com/liolu/simpsons-game-decomp) |
-| Madagascar | eu AMGP | Vicarious Visions | `█░░░░░░░░░` 8.58% | 973/3444 | ✅ | local (pas encore de match) |
 | SimAnimals | eu CM3P | EA | `█░░░░░░░░░` 8.54% | 707/2923 | ✅ | local (pas encore de match) |
-| Code Lyoko | usa AL5E | Game Machine Studios | `█░░░░░░░░░` 6.30% | 1736/7474 | ✅ | [code-lyoko-decomp](https://github.com/liolu/code-lyoko-decomp) |
-| Livly Garden | jp BLIJ | Brownie Brown | `█░░░░░░░░░` 5.73% | 1275/9012 | ✅ | [livly-garden-decomp](https://github.com/liolu/livly-garden-decomp) |
+| Livly Garden | jp BLIJ | Brownie Brown | `█░░░░░░░░░` 5.76% | 1281/9012 | ✅ | [livly-garden-decomp](https://github.com/liolu/livly-garden-decomp) |
 | Spyro: Shadow Legacy | usa ASSE | Amaze Entertainment | `░░░░░░░░░░` 4.93% | 799/3697 | ✅ | [spyro-shadow-legacy-decomp](https://github.com/liolu/spyro-shadow-legacy-decomp) |
 | Star Wars: Lethal Alliance | eu AWUP | Ubisoft | `░░░░░░░░░░` 4.58% | 1306/8569 | ✅ | local (pas encore de match) |
 | Spore Creatures | usa YSPE | Amaze Entertainment | `░░░░░░░░░░` 4.45% | 1554/12008 | ✅ | local (pas encore de match) |
-| Heroes of Mana | eu AHEP | Brownie Brown | `░░░░░░░░░░` 4.44% | 962/9264 | ✅ | [heroes-of-mana-decomp](https://github.com/liolu/heroes-of-mana-decomp) |
-| Eyeshield 21 | jp AE4J | Eighting | `░░░░░░░░░░` 2.88% | 1320/21940 | ✅ | [eyeshield-21-decomp](https://github.com/liolu/eyeshield-21-decomp) |
-| Fairy Tail: Madoushi | jp BH6J | Konami | `░░░░░░░░░░` 2.42% | 1302/11096 | ✅ | [fairy-tail-madoushi-decomp](https://github.com/liolu/fairy-tail-madoushi-decomp) |
+| Eyeshield 21 | jp AE4J | Eighting | `░░░░░░░░░░` 2.90% | 1328/21940 | ✅ | [eyeshield-21-decomp](https://github.com/liolu/eyeshield-21-decomp) |
+| Fairy Tail: Madoushi | jp BH6J | Konami | `░░░░░░░░░░` 2.53% | 1352/11096 | ✅ | [fairy-tail-madoushi-decomp](https://github.com/liolu/fairy-tail-madoushi-decomp) |
 | Professor Layton and the Spectre's Call | eu BLFP | Level-5 | `░░░░░░░░░░` 2.37% | 568/8430 | ✅ | local (pas encore de match) |
 | Star Wars Episode III | eu ASTP | Ubisoft | `░░░░░░░░░░` 2.35% | 805/6518 | ✅ | local (pas encore de match) |
-| Fairy Tail: Kardia | jp TFTJ | Konami | `░░░░░░░░░░` 1.93% | 1398/12899 | ✅ | [fairy-tail-kardia-decomp](https://github.com/liolu/fairy-tail-kardia-decomp) |
-| Club House Games | usa ATDE | Agenda | `░░░░░░░░░░` 0.83% | 392/8314 | ✅ | local (pas encore de match) |
-| Shrek Forever After | eu VSKV | Griptonite Games | `░░░░░░░░░░` 0.00% | 0/12253 | ✅ | local (pas encore de match) |
-| The Penguins of Madagascar | eu VPEV | Griptonite Games | `░░░░░░░░░░` 0.00% | 0/8879 | ✅ | local (pas encore de match) |
+| Fairy Tail: Kardia | jp TFTJ | Konami | `░░░░░░░░░░` 2.01% | 1454/12899 | ✅ | [fairy-tail-kardia-decomp](https://github.com/liolu/fairy-tail-kardia-decomp) |
+| Club House Games | usa ATDE | Agenda | `░░░░░░░░░░` 1.41% | 477/8314 | ✅ | local (pas encore de match) |
+| Shrek Forever After | eu VSKV | Griptonite Games | `░░░░░░░░░░` 0.00% | 1/12253 | ✅ | local (pas encore de match) |
+| The Penguins of Madagascar | eu VPEV | Griptonite Games | `░░░░░░░░░░` 0.00% | 5/8879 | ✅ | local (pas encore de match) |
 
 *Code matché : part du code des fonctions (ARM9, ITCM, DTCM, overlays) qui recompile à l'octet près. ROM ✅ : la ROM se reconstruit identique à l'originale.*
 <!-- games:end -->
