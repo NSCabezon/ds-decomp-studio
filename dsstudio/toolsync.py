@@ -12,10 +12,11 @@ import time
 from . import config, games, gitutil
 
 SOURCE = config.STUDIO / "gametools"
+PER_GAME: set[str] = set()  # nothing: per-game settings live in <project>/game.toml
 
 
 def tool_names() -> list[str]:
-    return sorted(p.name for p in SOURCE.glob("*.py"))
+    return sorted(p.name for p in SOURCE.glob("*.py") if p.name not in PER_GAME)
 
 
 def adapted(g, name: str) -> str | None:
