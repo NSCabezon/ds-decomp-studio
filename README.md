@@ -10,7 +10,7 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 ## Avancement des jeux
 
 <!-- games:start -->
-32 jeux, 21 publiés · 56938/232419 fonctions matchées au total · mis à jour le 2026-10-18 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
+32 jeux, 21 publiés · 58307/232419 fonctions matchées au total · mis à jour le 2026-10-20 par le bouton « Publier l'avancement sur GitHub » (onglet Jeux) ou `python studio.py progress`
 
 | Jeu | Version | Studio | Code matché | Fonctions | ROM | Dépôt |
 |---|---|---|---|---|---|---|
@@ -18,14 +18,14 @@ difficulty, cuts them into blocks of 50, and runs a shared work queue (claims li
 | Tom and Jerry Tales | eu AJTP | Sensory Sweep | `████░░░░░░` 41.00% | 1251/1921 | ✅ | local (pas encore de match) |
 | Ultimate Spider-Man | fra AUSF | Vicarious Visions | `███░░░░░░░` 31.43% | 2393/4592 | ✅ | [ultimate-spider-man-decomp](https://github.com/liolu/ultimate-spider-man-decomp) |
 | Powerpuff Girls Z | jp YPPJ | Bandai Namco | `███░░░░░░░` 26.01% | 1489/2359 | ✅ | [powerpuff-girls-z-decomp](https://github.com/liolu/powerpuff-girls-z-decomp) |
+| Heroes of Mana | eu AHEP | Brownie Brown | `██░░░░░░░░` 22.89% | 5175/9264 | ✅ | [heroes-of-mana-decomp](https://github.com/liolu/heroes-of-mana-decomp) |
+| LEGO Star Wars II | usa AL7E | Amaze Entertainment | `██░░░░░░░░` 22.34% | 2957/4763 | ✅ | [lego-star-wars-ii-the-original-trilogy-decomp](https://github.com/liolu/lego-star-wars-ii-the-original-trilogy-decomp) |
 | Madagascar | eu AMGP | Vicarious Visions | `██░░░░░░░░` 22.02% | 1803/3444 | ✅ | local (pas encore de match) |
+| Nintendogs Dachshund | usa ADGE | Nintendo EAD | `██░░░░░░░░` 20.87% | 3708/8609 | ✅ | [nintendogs-dachshund-decomp](https://github.com/liolu/nintendogs-dachshund-decomp) |
 | Farm Frenzy | usa BFZE | Alawar | `██░░░░░░░░` 19.90% | 777/1208 | ✅ | [farm-frenzy-decomp](https://github.com/liolu/farm-frenzy-decomp) |
-| Heroes of Mana | eu AHEP | Brownie Brown | `██░░░░░░░░` 19.75% | 4825/9264 | ✅ | [heroes-of-mana-decomp](https://github.com/liolu/heroes-of-mana-decomp) |
 | Dragon Ball Origins | eu CDZP | Game Republic | `██░░░░░░░░` 18.80% | 2932/5118 | ✅ | [dragon-ball-origins-decomp](https://github.com/liolu/dragon-ball-origins-decomp) |
-| Nintendogs Dachshund | usa ADGE | Nintendo EAD | `██░░░░░░░░` 17.16% | 3353/8609 | ✅ | [nintendogs-dachshund-decomp](https://github.com/liolu/nintendogs-dachshund-decomp) |
-| LEGO Star Wars II | usa AL7E | Amaze Entertainment | `██░░░░░░░░` 15.48% | 2384/4763 | ✅ | [lego-star-wars-ii-the-original-trilogy-decomp](https://github.com/liolu/lego-star-wars-ii-the-original-trilogy-decomp) |
 | Cooking Mama | usa ACCE | Office Create | `██░░░░░░░░` 15.35% | 1034/2551 | ✅ | [cooking-mama-decomp](https://github.com/liolu/cooking-mama-decomp) |
-| Resident Evil: Deadly Silence | usa ABHE | Capcom | `█░░░░░░░░░` 12.51% | 2208/5824 | ✅ | [resident-evil-deadly-silence-decomp](https://github.com/liolu/resident-evil-deadly-silence-decomp) |
+| Resident Evil: Deadly Silence | usa ABHE | Capcom | `█░░░░░░░░░` 13.34% | 2299/5824 | ✅ | [resident-evil-deadly-silence-decomp](https://github.com/liolu/resident-evil-deadly-silence-decomp) |
 | MySims | usa AQIE | EA | `█░░░░░░░░░` 11.97% | 2595/6820 | ✅ | [mysims-decomp](https://github.com/liolu/mysims-decomp) |
 | Code Lyoko | usa AL5E | Game Machine Studios | `█░░░░░░░░░` 11.02% | 2114/7474 | ✅ | [code-lyoko-decomp](https://github.com/liolu/code-lyoko-decomp) |
 | Blue Dragon: Awakened Shadow | ger YBUD | Brownie Brown | `█░░░░░░░░░` 10.71% | 3667/11800 | ✅ | [blue-dragon-awakened-shadow-decomp](https://github.com/liolu/blue-dragon-awakened-shadow-decomp) |
