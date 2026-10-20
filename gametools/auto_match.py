@@ -398,7 +398,7 @@ def compile_error(t: Path, source: str, mwcc: Path = MWCC, extra: str = "") -> t
     """(line number, message) of the first compiler error, or None when the source compiles."""
     (t / "f.o").unlink(missing_ok=True)
     (t / "f.c").write_text(source)
-    cmd = f'"{mwcc}" -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o'
+    cmd = f'{pc.exe_cmd(mwcc)} -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o'
     r = run_limited(cmd, cwd=t, shell=True)
     if r.returncode == 0 and (t / "f.o").exists():
         return None
@@ -474,7 +474,7 @@ def compile_and_compare(t: Path, source: str, name: str, size: int, addr: int, m
                         extra: str = "") -> str:
     (t / "f.o").unlink(missing_ok=True)
     (t / "f.c").write_text(source)
-    cmd = f'"{mwcc}" -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o'
+    cmd = f'{pc.exe_cmd(mwcc)} -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o'
     r = run_limited(cmd, cwd=t, shell=True)
     if r.returncode != 0 or not (t / "f.o").exists():
         return "compile"
@@ -507,7 +507,7 @@ def compile_batch(t: Path, sources: list[str], name: str, size: int, addr: int, 
     pending = list(range(len(unique)))
     while pending:
         files = " ".join(f"v{i}.c" for i in pending)
-        cmd = f'"{mwcc}" -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c {files} -o objs'
+        cmd = f'{pc.exe_cmd(mwcc)} -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c {files} -o objs'
         r = run_limited(cmd, cwd=work, shell=True, timeout=15 + len(pending) // 2)
         if r.stderr == "timeout":
             # One source makes the compiler loop: find it by compiling the rest one at a time
@@ -537,7 +537,7 @@ def diff_count(t: Path, name: str, size: int, addr: int, source: str, mwcc: Path
     """Number of differing instructions of a draft (a large number when it does not compile or changes size)."""
     (t / "f.o").unlink(missing_ok=True)
     (t / "f.c").write_text(source)
-    run_limited(f'"{mwcc}" -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o', cwd=t, shell=True)
+    run_limited(f'{pc.exe_cmd(mwcc)} -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o', cwd=t, shell=True)
     cand = pc.compiled_function(t / "f.o", name) if (t / "f.o").exists() else None
     if not cand or len(cand) != size:
         return 10**6

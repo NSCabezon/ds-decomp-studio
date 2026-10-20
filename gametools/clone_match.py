@@ -371,7 +371,7 @@ def check(img: Image, name: str, source: str, profile: str) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         (t / "f.c").write_text(source, encoding="utf-8")
-        cmd = (f'"{mwcc}" {CC_FLAGS} -lang=c {flags} -i "{ROOT / "include"}" -d {project.VERSION} -c f.c -o f.o')
+        cmd = (f'{am.pc.exe_cmd(mwcc)} {CC_FLAGS} -lang=c {flags} -i "{ROOT / "include"}" -d {project.VERSION} -c f.c -o f.o')
         r = am.run_limited(cmd, cwd=t, shell=True)
         if r.returncode != 0 or not (t / "f.o").exists():
             return "compile"

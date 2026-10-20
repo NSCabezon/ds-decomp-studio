@@ -32,6 +32,7 @@ CLAIM_HOURS = 48  # a claimed block nobody touched for this long goes back to th
 
 
 def _find_bash():
+    """Git Bash on Windows (WSL's bash.exe in System32 is not wanted), the system bash elsewhere."""
     for p in (ROOT.parent.parent / "Git" / "bin" / "bash.exe", Path("C:/Program Files/Git/bin/bash.exe"),
               Path("C:/Program Files (x86)/Git/bin/bash.exe")):
         if p.exists():
@@ -43,7 +44,7 @@ def _find_bash():
 BASH = _find_bash()
 
 DEFAULTS = {
-    "who": os.environ.get("USERNAME", "moi"),  # name used for claims
+    "who": os.environ.get("USERNAME") or os.environ.get("USER") or "moi",  # name used for claims
     "github_owner": "",                          # filled from `gh` on first publish
     "qwen_model": "qwen9-ctx",
     "qwen_minutes": 5,

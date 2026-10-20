@@ -350,7 +350,7 @@ def compile_one(source: str, profile: str) -> tuple[bytes | None, str, Path | No
     tmp = tempfile.TemporaryDirectory()
     t = Path(tmp.name)
     (t / "f.c").write_text(source, encoding="utf-8", newline="\n")
-    r = am.run_limited(f'"{mwcc}" -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o', cwd=t,
+    r = am.run_limited(f'{pc.exe_cmd(mwcc)} -O4,p {pc.BASE_FLAGS} {extra} -i "{ROOT / "include"}" -c f.c -o f.o', cwd=t,
                        shell=True)
     msg = ((r.stdout or "") + (r.stderr or "")).strip()
     obj = t / "f.o"

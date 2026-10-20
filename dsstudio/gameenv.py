@@ -8,8 +8,9 @@ from pathlib import Path
 from . import config
 
 ARM_BIN = Path("C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/14.2 rel1/bin")
-VENV = config.ROOT / ".venv" / "Scripts"
-PYTHON = VENV / "python.exe" if (VENV / "python.exe").exists() else Path(sys.executable)
+VENV = config.ROOT / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+_VENV_PYTHON = VENV / ("python.exe" if os.name == "nt" else "python")
+PYTHON = _VENV_PYTHON if _VENV_PYTHON.exists() else Path(sys.executable)
 
 
 def env() -> dict:
@@ -21,10 +22,13 @@ def env() -> dict:
         extra.append(p)
     e["PATH"] = os.pathsep.join(str(p) for p in extra[:5]) + os.pathsep + e.get("PATH", "") + \
         "".join(os.pathsep + str(p) for p in extra[5:])
-    e["MWCCARM"] = str(tools / "mwccarm")
-    e["M2C_PATH"] = str(tools / "m2c")
-    e["PERMUTER_PATH"] = str(tools / "decomp-permuter")
-    e["VIRTUAL_ENV"] = str(VENV.parent)
+    # Toolbox copies when the toolbox has them; otherwise each game falls back to its own tools/ (configure.py
+    # downloads tools/mwccarm)
+    for var, sub in (("MWCCARM", "mwccarm"), ("M2C_PATH", "m2c"), ("PERMUTER_PATH", "decomp-permuter")):
+        if (tools / sub).is_dir():
+            e[var] = str(tools / sub)
+    if VENV.is_dir():
+        e["VIRTUAL_ENV"] = str(VENV.parent)
     e["PYTHONIOENCODING"] = "utf-8"
     return e
 

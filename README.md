@@ -137,6 +137,13 @@ decomp ds/
 Ou bien `DSSTUDIO_ROOT=<dossier>`. Python 3.10+ seulement (bibliothèque standard ; `psutil` conseillé pour
 arrêter les tâches). Git Bash est nécessaire pour lancer les tâches sous Windows.
 
+macOS (Apple Silicon ou Intel) : `python3 tools/configure.py <version>` puis `ninja` téléchargent dsd et objdiff-cli
+(builds macOS) et wibo 1.2.0 (`wibo-macos`, x86_64 : Rosetta 2 sur Apple Silicon), qui lance mwccarm.exe /
+mwldarm.exe. sjiswrap n'est pas utilisé sur macOS (wibo-macos n'a pas `FormatMessageA`) : les sources doivent être
+en ASCII. Les outils (`workbench.py`, `auto_match.py`...) lancent le compilateur à travers `./wibo` du jeu (ou
+`$WIBO`). Venv conseillé : `python3 -m venv <dossier>/.venv && <dossier>/.venv/bin/pip install -r
+projets/<jeu>/tools/requirements.txt` (le studio prend `.venv/bin/python` s'il existe).
+
 ## Règles
 
 - Jamais de ROM, d'assets ou de binaires du jeu sur GitHub : la publication refuse un repo qui suit des fichiers

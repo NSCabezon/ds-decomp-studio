@@ -99,7 +99,7 @@ def compile_check(text: str, part, compiler: str) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         (t / "f.c").write_text(text, encoding="utf-8", errors="surrogateescape")
-        cmd = (f'"{am.MWCC_ROOT / version / "mwccarm.exe"}" {dm.BUILD_CC_FLAGS} -lang=c {flags[0]} '
+        cmd = (f'{pc.exe_cmd(am.MWCC_ROOT / version / "mwccarm.exe")} {dm.BUILD_CC_FLAGS} -lang=c {flags[0]} '
                f'-i "{ROOT / "include"}" -d {project.VERSION} -c f.c -o f.o')
         r = am.run_limited(cmd, cwd=t, shell=True, timeout=60)
         if r.returncode != 0 or not (t / "f.o").exists():

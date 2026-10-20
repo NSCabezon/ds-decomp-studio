@@ -2,6 +2,7 @@
 """MCP server of DS Decomp Studio: Claude Code, Codex or any MCP client works on the games directly.
 
     claude mcp add ds-studio -- "<toolbox>/.venv/Scripts/python.exe" "<toolbox>/studio/workers/mcp_server.py"
+    (macOS / Linux: "<toolbox>/.venv/bin/python")
 
 (or `python studio/studio.py mcp-config` prints the command). Standard library only: JSON-RPC 2.0 over stdio, one
 message per line. Every tool works through the game's own tools/workbench.py (compiled and judged exactly like

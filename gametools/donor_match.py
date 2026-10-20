@@ -100,7 +100,7 @@ def build_check(source: str, name: str, size: int, addr: int, version: str, flag
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         (t / "f.c").write_text(source)
-        cmd = (f'"{am.MWCC_ROOT / version / "mwccarm.exe"}" {BUILD_CC_FLAGS} -lang=c {flags} '
+        cmd = (f'{pc.exe_cmd(am.MWCC_ROOT / version / "mwccarm.exe")} {BUILD_CC_FLAGS} -lang=c {flags} '
                f'-i "{ROOT / "include"}" -d {project.VERSION} -c f.c -o f.o')
         r = am.run_limited(cmd, cwd=t, shell=True)
         if r.returncode != 0 or not (t / "f.o").exists():
@@ -291,7 +291,7 @@ def _preprocess(dn, repo: str, rel: str, profile: str, incs: str, out: Path) -> 
     if not out.exists():
         version, flags = dn.PROFILES[profile]
         out.parent.mkdir(parents=True, exist_ok=True)
-        cmd = (f'"{dn.MWCC_ROOT / version / "mwccarm.exe"}" -E {flags} {dn.COMMON} {dn.DEFINES} {incs} '
+        cmd = (f'{pc.exe_cmd(dn.MWCC_ROOT / version / "mwccarm.exe")} -E {flags} {dn.COMMON} {dn.DEFINES} {incs} '
                f'"{dn.EXT / repo / rel}" -o "{out}"')
         subprocess.run(cmd, shell=True, cwd=dn.EXT / repo, capture_output=True, timeout=60)
     return out.read_text(encoding="latin-1") if out.exists() else None
@@ -471,7 +471,7 @@ def _preprocess_internal(g: Path, path: str, version: str, flags: str, out: Path
     if not out.exists():
         out.parent.mkdir(parents=True, exist_ok=True)
         mwcc = am.MWCC_ROOT / version / "mwccarm.exe"
-        cmd = f'"{mwcc}" -E {pc.BASE_FLAGS} {flags} -i "{g / "include"}" "{g / path}" -o "{out}"'
+        cmd = f'{pc.exe_cmd(mwcc)} -E {pc.BASE_FLAGS} {flags} -i "{g / "include"}" "{g / path}" -o "{out}"'
         subprocess.run(cmd, shell=True, cwd=g, capture_output=True, timeout=60)
     return out.read_text(encoding="latin-1") if out.exists() else None
 

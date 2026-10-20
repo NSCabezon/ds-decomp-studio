@@ -6,7 +6,9 @@ Each task runs in Git Bash after `source env.sh`, its full log goes to data/logs
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -276,6 +278,8 @@ def _start(j):
     env_line = f"source {_q(config.ENV_SH.as_posix())} >/dev/null 2>&1; " if config.ENV_SH.exists() else ""
     if config.FPDB.exists() and j["id"] == "qwen":
         env_line += f"export DSSTUDIO_ROOT={_q(config.ROOT.as_posix())}; "
+    if os.name != "nt" and not shutil.which("python"):  # tasks say `python`; macOS only has python3
+        env_line += f'python() {{ {_q(sys.executable)} "$@"; }}; '
     full = f"{env_line}cd {_q(cwd.as_posix())} && {j['cmd']}"
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     j["state"], j["started"] = "running", time.time()
@@ -284,7 +288,7 @@ def _start(j):
     logf.flush()  # visible in the Queue tab right away, even before the task prints anything
     try:
         p = subprocess.Popen([str(config.BASH), "-c", full], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             env=env, creationflags=0x08000000)
+                             env=env, creationflags=0x08000000 if os.name == "nt" else 0)
     except Exception as e:
         j["state"], j["ended"] = "failed", time.time()
         j["log"].append(f"impossible de lancer Git Bash : {e}")

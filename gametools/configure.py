@@ -16,12 +16,13 @@ DEFAULT_WIBO_PATH = "./wibo"
 
 
 parser = argparse.ArgumentParser(description="Generates build.ninja")
-parser.add_argument('-w', type=str, default=DEFAULT_WIBO_PATH, dest="wine", required=False, help="Path to Wine/Wibo (linux only)")
+parser.add_argument('-w', type=str, default=DEFAULT_WIBO_PATH, dest="wine", required=False, help="Path to Wine/Wibo (linux and macOS; default: wibo, downloaded)")
 parser.add_argument("--compiler", type=Path, required=False, help="Path to pre-installed compiler root directory (default: $MWCCARM, else tools/mwccarm)")
 parser.add_argument("--no-extract", action="store_true", help="Skip extract step")
 parser.add_argument("--dsd", type=Path, required=False, help="Path to pre-installed dsd CLI")
 parser.add_argument("--objdiff", type=Path, help="Path to pre-installed objdiff CLI")
 parser.add_argument("--sjiswrap", type=Path, help="Path to pre-installed sjiswrap executable")
+parser.add_argument("--no-sjiswrap", action="store_true", help="Run the compiler without sjiswrap (default on macOS: wibo-macos lacks an API sjiswrap needs; sources must be ASCII)")
 parser.add_argument('version', help='Game version')
 args = parser.parse_args()
 if args.dsd is None and (Path(__file__).resolve().parent.parent / "dsd-dsi.exe").exists():
@@ -52,6 +53,7 @@ def _game_name() -> str:
 GAME = GAME_CFG.get("game") or _game_name()
 DSD_VERSION = 'v0.12.1'
 WIBO_VERSION = '0.6.16'
+WIBO_MACOS_VERSION = '1.2.0'  # first wibo releases with a macOS build (wibo-macos, x86_64: Rosetta 2)
 SJISWRAP_VERSION = 'v1.2.2'
 OBJDIFF_VERSION = 'v3.8.2'
 MWCC_VERSION = GAME_CFG.get("mwcc_version", "2.0/sp1p5")
@@ -142,6 +144,9 @@ WINE = args.wine if platform.system != "windows" else ""
 DSD = str(args.dsd or os.path.join('.', str(root_path / f"dsd{EXE}")))
 OBJDIFF = str(args.objdiff or os.path.join('.', str(root_path / f"objdiff-cli{EXE}")))
 SJISWRAP = str(args.sjiswrap or os.path.join('.', "sjiswrap.exe"))
+# sjiswrap 1.2.2 resolves kernel32 FormatMessageA, which wibo 1.2.0 (macOS) does not provide. It only converts
+# Shift-JIS text, so an ASCII source compiles to the same bytes without it.
+USE_SJISWRAP = not args.no_sjiswrap and (platform.system != "macos" or args.sjiswrap is not None)
 CC = os.path.join('.', str(mwcc_path / "mwccarm.exe"))
 LD = os.path.join('.', str(mwcc_path / "mwldarm.exe"))
 PYTHON = sys.executable
@@ -304,8 +309,9 @@ def main():
 
         # -MMD excludes all includes instead of just system includes for some reason, so use -MD instead.
         # $cc is set per source file (see compiler_overrides)
-        mwcc_cmd = f'{WINE} {SJISWRAP} "$cc" {CC_FLAGS} {CC_INCLUDES} $cc_flags $cc_extra -d $game_version -MD -c $in -o $basedir'
-        mwcc_implicit = [SJISWRAP]
+        sjiswrap = f"{SJISWRAP} " if USE_SJISWRAP else ""
+        mwcc_cmd = f'{WINE} {sjiswrap}"$cc" {CC_FLAGS} {CC_INCLUDES} $cc_flags $cc_extra -d $game_version -MD -c $in -o $basedir'
+        mwcc_implicit = [SJISWRAP] if USE_SJISWRAP else []
         if platform.system != "windows":
             transform_dep = "tools/transform_dep.py"
             mwcc_cmd += f" && {PYTHON} {transform_dep} $basefile.d $basefile.d"
@@ -462,13 +468,13 @@ def add_download_tool_builds(n: ninja_syntax.Writer, project: Project):
             outputs=WINE,
             variables={
                 "tool": "wibo",
-                "tag": WIBO_VERSION,
+                "tag": WIBO_MACOS_VERSION if project.platform.system == "macos" else WIBO_VERSION,
                 "path": WINE,
             },
         )
         n.newline()
 
-    if args.sjiswrap is None:
+    if args.sjiswrap is None and USE_SJISWRAP:
         downloads.append(SJISWRAP)
         n.build(
             rule="download_tool",

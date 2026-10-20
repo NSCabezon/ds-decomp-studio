@@ -28,6 +28,30 @@ ARM9_BIN = project.EXTRACT / "arm9" / "arm9.bin"
 SYMBOLS = project.SYMBOLS
 ARM9_BASE = 0x02000000
 
+def _windows_runner() -> str:
+    """What runs a Windows program (mwccarm.exe) here: nothing on Windows; $WIBO or $WINE when set; on macOS the
+    game's ./wibo (downloaded by tools/configure.py) or wibo on PATH. Linux keeps running the .exe directly
+    (binfmt) unless $WIBO / $WINE is set."""
+    if os.name == "nt":
+        return ""
+    for var in ("WIBO", "WINE"):
+        if os.environ.get(var):
+            return os.environ[var]
+    if sys.platform == "darwin":
+        if (ROOT / "wibo").is_file():
+            return str(ROOT / "wibo")
+        return shutil.which("wibo") or ""
+    return ""
+
+
+WINDOWS_RUNNER = _windows_runner()
+
+
+def exe_cmd(path) -> str:
+    """Shell command text that runs a Windows program (mwccarm.exe), quoted, on this host."""
+    return (f'"{WINDOWS_RUNNER}" ' if WINDOWS_RUNNER else "") + f'"{path}"'
+
+
 BASE_FLAGS = "-enum int -char signed -str noreuse -proc arm946e -gccext,on -fp soft -inline noauto -lang=c -interworking -w off -nolink"
 
 
@@ -145,7 +169,7 @@ def main():
             for flags in flag_sets:
                 obj = Path(tmp) / "probe.o"
                 obj.unlink(missing_ok=True)
-                cmd = f'"{cc}" {flags} {BASE_FLAGS} -i "{ROOT / 'include'}" -c "{args.source.resolve()}" -o "{obj}"'
+                cmd = f'{exe_cmd(cc)} {flags} {BASE_FLAGS} -i "{ROOT / 'include'}" -c "{args.source.resolve()}" -o "{obj}"'
                 r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmp)
                 if r.returncode != 0 or not obj.exists():
                     if args.show:
